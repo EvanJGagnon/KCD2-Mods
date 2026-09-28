@@ -1,0 +1,64 @@
+THEATRICAL AUTOFORGE 1.0.0 - Kingdom Come: Deliverance II
+by Flubbermunchkin
+
+Henry forges the piece himself, stroke by stroke, while you watch. The mod plays the
+blacksmithing minigame through the game's own forge actions: it heats the piece zone by zone
+with the bellows, keeps the fire below the point where the metal burns, carries it to the anvil,
+hammers in time with the forge music, flips it when one side is worked out, reheats when it
+cools, and hands it over for the quench. Nothing is skipped or completed instantly.
+
+This is one of our first mods for this game. It has been tested on one setup only, so expect
+issues we have not run into yet - please report them (see BUG REPORTS below).
+
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
+
+INSTALL
+  Vortex: install as usual.
+  Manual: copy the "theatrical_autoforge" folder from this archive into <game>\Mods\
+          (you should end up with <game>\Mods\theatrical_autoforge\KCSE\Plugins\kcd2_autoforge.dll).
+  Uninstall: delete that folder.
+
+HOW TO USE
+  1. At a forge, choose a blueprint as usual and wait until Henry is standing at the forge
+     (or at the anvil).
+  2. Press F9. Press F9 again at any time to stop and take over by hand.
+  3. When the piece is finished the game's own quench runs; check the result as usual.
+
+SETTINGS  (Mods\theatrical_autoforge\KCSE\Plugins\kcd2_autoforge.ini)
+  [Keys]    Forge=F9        start/stop key (F1-F12, a letter, or a virtual-key code)
+  [Options] DebugLog=0      1 = detailed log for bug reports
+
+TESTED
+  Sword, long sword, axe, mace and horseshoe, with results around 0.97-0.99 quality.
+  Other items use the game's generic workpiece and should work, but are untested.
+
+KNOWN ISSUES AND LIMITATIONS
+  - Only tested with the Steam version of the game (1.5.x, build 15693).
+  - Strokes are timed to the forge music tempo; if a stroke misses, the next few may score a bit
+    lower until the rhythm is re-established (the same as when you forge by hand).
+  - Stamina is left to recover on its own; with very low stamina a stroke may be skipped.
+  - If you interrupt the forge (leave, open a menu, get attacked), the mod stops; start it again
+    with F9 once Henry is back at the forge.
+  - Mods that change the blacksmithing minigame itself may not be compatible.
+
+GAME UPDATES
+  The mod does not use fixed memory addresses. At startup it finds the game code it needs by
+  pattern and by class name. If a game update changes that code, the mod turns itself off and
+  changes nothing - the game simply plays as vanilla, it does not crash. The log then says
+  "disabled: this game version is not supported yet". Watch this page for an update.
+
+BUG REPORTS
+  Please include kcd2_autoforge.log (next to the DLL, rewritten every session), ideally with
+  DebugLog=1 set in the .ini, and say what you were forging.
+
+CREDITS
+  - JerryYOJ for KCSE and the Address Library, and for libKCD2 (github.com/JerryYOJ/libKCD2),
+    whose public reverse-engineering notes helped with parts of the research.
+  - Warhorse Studios for Kingdom Come: Deliverance II.
+
+LICENSE
+  GNU GPL v3 (LICENSE.txt). The source code is available as a separate download on the Nexus page.

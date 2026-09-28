@@ -1,0 +1,19 @@
+@echo off
+rem Builds the three mods (release: out\) plus development builds and test tools (out\dev\).
+rem Requires Visual Studio 2022 (x64 C++ tools).  Set KC_AUTHOR first, e.g.  set KC_AUTHOR=YourName
+setlocal
+cd /d "%~dp0"
+call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
+if "%KC_AUTHOR%"=="" set KC_AUTHOR=unknown
+if not exist out\obj mkdir out\obj
+if not exist out\dev mkdir out\dev
+set CF=/nologo /std:c++17 /EHa /O2 /MT /W3 /DKC_AUTHOR=\"%KC_AUTHOR%\" /Isrc
+set LF=/link /DLL user32.lib kernel32.lib
+for %%m in (autoforge alchemy autotravel) do (
+  cl %CF% /LD src\%%m.cpp /Foout\obj\ /Feout\kcd2_%%m.dll %LF% || exit /b 1
+  cl %CF% /DKC_DEVTOOLS /LD src\%%m.cpp /Foout\obj\ /Feout\dev\kcd2_%%m.dll %LF% || exit /b 1
+)
+cl /nologo /O2 tools\selftest.cpp /Foout\obj\ /Feout\dev\selftest.exe || exit /b 1
+cl /nologo /O2 tools\routetest.cpp /Foout\obj\ /Feout\dev\routetest.exe || exit /b 1
+del /q out\*.exp out\*.lib out\dev\*.exp out\dev\*.lib 2>nul
+echo Build OK.

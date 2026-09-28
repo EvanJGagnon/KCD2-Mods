@@ -1,0 +1,83 @@
+HORSE ROUTE FOLLOW 1.0.0 - Kingdom Come: Deliverance II
+by Flubbermunchkin
+
+The game's horse auto-follow picks a branch at random at every fork. With this mod it follows
+a route to your custom map marker instead: place a marker, get on a road, let the horse follow,
+and it takes the right turn at every junction - like a GPS. The route is drawn on the map with
+the same dotted line the game uses for fast travel, and the horse stops when you arrive.
+
+This is one of our first mods for this game. It has been tested on one setup only, so expect
+issues we have not run into yet - please report them (see BUG REPORTS below).
+
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
+
+INSTALL
+  Vortex: install as usual.
+  Manual: copy the "horse_route_follow" folder from this archive into <game>\Mods\
+          (you should end up with <game>\Mods\horse_route_follow\KCSE\Plugins\kcd2_autotravel.dll).
+  Uninstall: delete that folder.
+
+HOW TO USE
+  1. Open the map and place a custom marker. The planned route appears as a dotted line.
+  2. Get on your horse, ride onto a road and let auto-follow take over as usual.
+  3. The horse follows the route and stops near the marker.
+  F6 turns the routing on and off (with it off, auto-follow behaves as vanilla).
+
+HOW IT BEHAVES
+  - GPS style: the route always starts in the direction you are travelling. Facing the wrong
+    way or taking a wrong turn does not stop the horse; the route is recalculated from where
+    you are.
+  - The mod only chooses between roads the game's auto-follow offers. It never steers the horse
+    itself, and it never leaves a moving horse without a road: if the game offers nothing that
+    fits the route, the game's own choice wins and the route is recalculated.
+  - Markers away from roads route to the nearest road point; the horse stops when you are about
+    as close to the marker as the road gets.
+  - Some trails the game can auto-follow are not drawn on the map; routes may use them.
+
+SETTINGS  (Mods\horse_route_follow\KCSE\Plugins\kcd2_autotravel.ini)
+  [Keys]    Toggle=F6            routing on/off
+  [Options] BrakeOnArrival=1     briefly hold S to stop the horse on arrival (0 = don't)
+            ArriveDistance=3     how close to the end of the route to stop, in metres
+                                 (raise it if the horse overshoots, lower it if it stops short)
+            UTurnPenalty=400     a later turn-around (dead end) counts as this many extra metres
+            MapRoute=1           draw the route on the map (0 = don't)
+            DebugLog=0           1 = detailed log for bug reports
+
+KNOWN ISSUES AND LIMITATIONS
+  - Only tested with the Steam version of the game (1.5.x, build 15693).
+  - Regions: Trosecko is well tested; Kuttenberg and the monastery map are included but have had
+    little testing.
+  - Only roads the game can auto-follow are used, so routes can differ from what the map shows,
+    and a marker far from any road is reached only as far as the nearest road point.
+  - At a road that simply ends, the horse stops; turn around and it continues.
+  - In towns with many small streets the route can occasionally take a detour before it settles;
+    it still gets there.
+  - Other traffic (wagons, NPCs) blocks the horse the same way it does in vanilla.
+  - The map line is drawn when the map updates the marker. Hovering a fast-travel point shows the
+    game's own line instead; reopen the map to see the route again.
+  - Stopping works by briefly holding S; it is skipped if another program has focus.
+  - Mods that change horse auto-follow ("road magnetism") or the map screen may not be compatible.
+
+GAME UPDATES
+  The mod does not use fixed memory addresses. At startup it finds the game code it needs by
+  pattern and by class name. If a game update changes that code, the mod turns itself off and
+  changes nothing - the game simply plays as vanilla, it does not crash. The log then says
+  "disabled: this game version is not supported yet". Watch this page for an update.
+  (A game update that changes the road network itself would also need new road data.)
+
+BUG REPORTS
+  Please include kcd2_autotravel.log (next to the DLL, rewritten every session), ideally with
+  DebugLog=1 set in the .ini, and say where you were riding to and from.
+
+CREDITS
+  - JerryYOJ for KCSE and the Address Library, and for libKCD2 (github.com/JerryYOJ/libKCD2),
+    whose public reverse-engineering notes helped with parts of the research.
+  - Warhorse Studios for Kingdom Come: Deliverance II. The road data is generated from the
+    game's own files at build time; no game files are redistributed.
+
+LICENSE
+  GNU GPL v3 (LICENSE.txt). The source code is available as a separate download on the Nexus page.

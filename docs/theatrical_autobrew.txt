@@ -1,0 +1,76 @@
+THEATRICAL AUTOBREW 1.0.0 - Kingdom Come: Deliverance II
+by Flubbermunchkin - an adaptation of Autobrew by JerryYOJ
+
+Open a recipe in the alchemy book, press F8, and Henry brews it - visibly, step by step, in real
+time: he pours the base, grinds and adds each ingredient, sets the pot on the fire, waits for the
+boil, turns the hourglass once per recipe turn, works the bellows for strong boils, and distils or
+pours the result. There are no instant results; the brew takes as long as it would by hand.
+
+BASED ON AUTOBREW BY JerryYOJ
+  This mod is not an original work. It is an adaptation ("child") of Autobrew by JerryYOJ:
+  its recipe planner and brewing logic are ported from Autobrew's public source code
+  (github.com/JerryYOJ/libKCD2, Projects/Autobrew), which is licensed under the GNU GPL v3.
+  What this version changes is the execution: every step is played out on screen in real time,
+  and it runs as its own plugin. All credit for working out how brewing can be automated goes
+  to JerryYOJ. If you want the original, with its own features (mistakes, looping, MCM
+  settings), use his mod: Autobrew Returned and Enhanced
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3394
+  Do not run both mods at the same time.
+
+This is one of our first mods for this game. It has been tested on one setup only, so expect
+issues we have not run into yet - please report them (see BUG REPORTS below).
+
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
+
+INSTALL
+  Vortex: install as usual.
+  Manual: copy the "theatrical_autobrew" folder from this archive into <game>\Mods\
+          (you should end up with <game>\Mods\theatrical_autobrew\KCSE\Plugins\kcd2_alchemy.dll).
+  Uninstall: delete that folder.
+
+HOW TO USE
+  1. At an alchemy table, open the book to the recipe you want. All ingredients must be in
+     Henry's inventory.
+  2. Press F8 (with the book open, or just after closing it at the table).
+  3. Press F8 again at any time to stop.
+
+SETTINGS  (Mods\theatrical_autobrew\KCSE\Plugins\kcd2_alchemy.ini)
+  [Keys]    Brew=F8         start/stop key (F1-F12, a letter, or a virtual-key code)
+  [Options] DebugLog=0      1 = detailed log for bug reports
+
+TESTED
+  Weak and strong boils, distilled potions and powders (for example Bowman's Brew, Buck's Blood,
+  Chamomile Concoction, lead shot). Brews come out at the quality Henry's skill and perks allow.
+
+KNOWN ISSUES AND LIMITATIONS
+  - Only tested with the Steam version of the game (1.5.x, build 15693).
+  - Brews one batch per key press (no looping).
+  - Recipes with steps the mod cannot perform are refused (see the log).
+  - Each boiling turn takes slightly longer than the hourglass itself, because the mod waits for
+    the pot to boil before turning it; this has not affected quality in testing.
+  - If the brew is interrupted (you leave the table, open a menu, get attacked), the mod stops;
+    finish by hand or reset the table and start again.
+  - Mods that change the alchemy minigame or recipes may not be compatible.
+
+GAME UPDATES
+  The mod does not use fixed memory addresses. At startup it finds the game code it needs by
+  pattern and by class name. If a game update changes that code, the mod turns itself off and
+  changes nothing - the game simply plays as vanilla, it does not crash. The log then says
+  "disabled: this game version is not supported yet". Watch this page for an update.
+
+BUG REPORTS
+  Please include kcd2_alchemy.log (next to the DLL, rewritten every session), ideally with
+  DebugLog=1 set in the .ini, and name the recipe.
+
+CREDITS
+  - JerryYOJ for Autobrew (the planner and brewing logic this mod is built on), for KCSE and the
+    Address Library, and for libKCD2.
+  - Warhorse Studios for Kingdom Come: Deliverance II.
+
+LICENSE
+  GNU GPL v3 (LICENSE.txt), as required by Autobrew's license. The source code, including the
+  ported Autobrew parts, is available as a separate download on the Nexus page.
