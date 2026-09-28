@@ -5,18 +5,23 @@ Native (C++) mods for **Kingdom Come: Deliverance II**, loaded by the
 
 | Mod | What it does | Key |
 |---|---|---|
-| **Horse Route Follow** | Horse auto-follow takes the right turn at every fork to reach your custom map marker. The route is drawn on the map like fast travel, wrong turns are recalculated (GPS-style), and the horse stops when you arrive. | F6 (on/off) |
-| **Theatrical AutoForge** | Henry forges the chosen piece himself, stroke by stroke: heating, bellows, hammering in rhythm, flipping, reheating and quench - all through the game's own forge actions. | F9 |
-| **Theatrical Autobrew** | Henry brews the recipe open in the alchemy book on screen, step by step and in real time. **An adaptation of [Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3394) by JerryYOJ** (see below). | F8 |
+| **[Horse Route Follow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3742)** | Horse auto-follow takes the right turn at every fork to reach your custom map marker. The route is drawn on the map like fast travel, wrong turns are recalculated (GPS-style), and the horse stops when you arrive. | F6 (on/off) |
+| **[Theatrical AutoForge](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3743)** | Henry forges the chosen piece himself, stroke by stroke: heating, bellows, hammering in rhythm, flipping, reheating and quench - all through the game's own forge actions. | F9 |
+| **[Theatrical Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3744)** | Henry brews the recipe open in the alchemy book on screen, step by step and in real time. **An adaptation of [Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3394) by JerryYOJ** (see below). | F8 |
 
 ![Horse Route Follow - route drawn on the map](media/horse_route_follow_map.jpg)
 
+> Most of the code and text in this project was written with AI assistance (Claude); the mods are tagged accordingly on Nexus.
+>
 > These are our first mods for this game and have been tested on one setup (Steam, game 1.5.x build 15693).
 > Expect issues we have not run into yet - bug reports with the mod's log are very welcome.
 
 ## Download and install
 
-Downloads, install instructions and support are on Nexus Mods (links will be added here once the pages are live).
+Downloads, install instructions and support are on Nexus Mods:
+[Horse Route Follow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3742) -
+[Theatrical AutoForge](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3743) -
+[Theatrical Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3744)
 Each mod needs:
 
 - [Kingdom Come Script Extender (KCSE)](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332) by JerryYOJ
