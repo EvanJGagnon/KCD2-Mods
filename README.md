@@ -5,7 +5,7 @@ Native (C++) mods for **Kingdom Come: Deliverance II**, loaded by the
 
 | Mod | What it does | Key |
 |---|---|---|
-| **[Horse Route Follow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3742)** | Horse auto-follow takes the right turn at every fork to reach your custom map marker. The route is drawn on the map like fast travel, wrong turns are recalculated (GPS-style), and the horse stops when you arrive. | F6 (on/off) |
+| **[Horse Route Follow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3742)** | Horse auto-follow takes the right turn at every fork to reach your custom map marker. The route is drawn on the map like fast travel, the route is recalculated only if you leave it, and the horse stops on the road closest to the marker. Always on while a marker is placed. | none |
 | **[Theatrical AutoForge](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3743)** | Henry forges the chosen piece himself, stroke by stroke: heating, bellows, hammering in rhythm, flipping, reheating and quench - all through the game's own forge actions. | F9 |
 | **[Theatrical Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3744)** | Henry brews the recipe open in the alchemy book on screen, step by step and in real time. **An adaptation of [Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3394) by JerryYOJ** (see below). | F8 |
 

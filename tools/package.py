@@ -18,10 +18,10 @@ MODS = [
          ini='[Keys]\n' + KEYHELP + 'Brew=F8\n\n[Options]\n' + DEBUG),
     dict(folder='horse_route_follow', title='Horse Route Follow', zip='HorseRouteFollow', dll='kcd2_autotravel.dll',
          data=['trosecko.amg', 'kutnohorsko.amg', 'klaster.amg'],
-         desc='Horse auto-follow takes the road route to your custom map marker, drawn on the map (F6 toggles).',
-         ini='[Keys]\n' + KEYHELP + 'Toggle=F6\n\n[Options]\n'
+         desc='Horse auto-follow takes the road route to your custom map marker, drawn on the map.', ver='1.0.2',
+         ini='[Options]\n'
              '; 1 = briefly hold S to stop the horse on arrival\nBrakeOnArrival=1\n'
-             '; stop this many metres from the end of the route (it also brakes a little earlier at speed);\n'
+             '; stop this many metres before the point of road closest to the marker (it also brakes a little earlier at speed);\n'
              '; raise it if the horse overshoots, lower it if it stops short\nArriveDistance=3\n'
              '; routes always start the way you are travelling; a later turn-around (dead end) counts as this many extra metres\nUTurnPenalty=400\n'
              '; 1 = draw the planned route on the map\nMapRoute=1\n' + DEBUG),
@@ -35,7 +35,7 @@ def manifest(m):
     <modid>{m['folder']}</modid>
     <description>{m['desc']}</description>
     <author>{AUTHOR}</author>
-    <version>{VER}</version>
+    <version>{m.get('ver', VER)}</version>
     <created_on>{datetime.date.today().isoformat()}</created_on>
   </info>
 </kcd_mod>
@@ -65,6 +65,6 @@ if __name__ == '__main__':
     stg = os.path.join(dist, 'stage')
     for m in MODS:
         stage(m, stg)
-        zipdir(stg, m['folder'], os.path.join(dist, f"{m['zip']}-{VER}.zip"))
+        zipdir(stg, m['folder'], os.path.join(dist, f"{m['zip']}-{m.get('ver', VER)}.zip"))
     for f in sorted(os.listdir(dist)):
         if f.endswith('.zip'): print(f, os.path.getsize(os.path.join(dist, f)))

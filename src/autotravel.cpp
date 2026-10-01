@@ -42,13 +42,20 @@ static const char* SIG_SHOWPATH = "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 50 
 // The game hiding that line: string ctor, SendEvent(element, "HideFastTravelPath", bool&), string dtor.  (0x1F4D2CE)
 static const char* SIG_HIDEPATH = "48 8D 15 ?? ?? ?? ?? 48 8B 59 10 48 8D 4C 24 40 C6 44 24 38 01 E8 ?? ?? ?? ?? 4C 8D 44 24 38 48 8D 54 24 40 48 8D 8B 08 02 00 00 E8 ?? ?? ?? ?? 48 8D 4C 24 40 E8 ?? ?? ?? ?? 48 8B 5C 24 20";
 
+static const char* SIG_APSE_REF  = "E8 ?? ?? ?? ?? 48 8B 88 E8 00 00 00 E8 ?? ?? ?? ?? 48 8D 54 24 78 48 8D 88 08 15 00 00"; // 0x2BA782B: game->UI module->map
+static const char* SIG_GETMODULE = "48 89 5C 24 08 56 57 41 56 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 48 85 C0 75";   // UI module getter 0x5677CC
+
 // ---------------- tunables ----------------
 static const float    NODE_TOL      = 3.0f;    // candidate point -> graph node
+static const float    EXACT_TOL    = 1.5f;    // candidate point is this graph node (the graph merges points closer than this)
 static const float    MARKER_SNAP   = 5000.0f; // marker -> nearest road node (off-road markers route to the closest road point)
 static const float    CORRIDOR      = 6.0f;    // metres around the route that count as on it (parallel streets/alleys)
 static const float    FIRST_BAN     = 1e6f;    // cost of starting a route backwards (effectively never)
 static const uint64_t STUCK_MS      = 400;     // standing: every road ahead refused this long -> let the game choose
 static const uint64_t STUCK_MOVE_MS = 150;     // moving:   every road ahead refused this long -> let the game choose
+static const uint64_t STUCK_NONE_MS = 900;     // moving:   no road accepted at all this long -> let the game choose
+static const float    DEVIATE       = 15.0f;   // rider this far from the route ...
+static const uint64_t DEVIATE_MS    = 1000;    // ... for this long = left the route: recalculate
 static const float    BRAKE_LEAD_S  = 0.4f;    // brake earlier by this many seconds of travel
 static const DWORD    BRAKE_MS      = 1200;    // hold S this long on arrival
 static float g_arriveDist = 3.0f;              // ini ArriveDistance
@@ -80,7 +87,6 @@ static volatile uintptr_t* g_p1 = nullptr;     // candidate end point
 static volatile uintptr_t* g_map = nullptr;    // map controller (C_UIMap)
 
 // ---------------- shared state ----------------
-static volatile long g_on = 1;
 static HANDLE g_brakeEvt = nullptr;
 // rider (player entity; the horse is under him), tracked every 20 ms off the game thread
 static volatile uintptr_t g_ent=0; static uint64_t g_entT=0;
@@ -144,6 +150,18 @@ struct Graph {
         float dx=x[v]-x[u], dy=y[v]-y[u], l=hypotf(dx,dy);
         return l>0.01f && (ax!=0||ay!=0) && (dx*ax+dy*ay)/l < -0.2f;
     }
+    // Closest point to (px,py) on any road segment: the point (qx,qy) on segment a-b.
+    bool closest_on_road(float px,float py,float& qx,float& qy,int& a,int& b) const {
+        float bd=1e30f; a=b=-1;
+        for(int u=0;u<(int)x.size();u++) for(uint32_t e=off[u];e<off[u+1];e++){
+            int v=to[e]; if(v<u) continue;
+            float ex=x[v]-x[u], ey=y[v]-y[u], l2=ex*ex+ey*ey;
+            float t= l2>1e-6f ? ((px-x[u])*ex+(py-y[u])*ey)/l2 : 0.f; t=std::min(1.f,std::max(0.f,t));
+            float cx=x[u]+t*ex, cy=y[u]+t*ey, d=(cx-px)*(cx-px)+(cy-py)*(cy-py);
+            if(d<bd){ bd=d; qx=cx; qy=cy; a=u; b=v; }
+        }
+        return a>=0;
+    }
     void dir(uint32_t e,int u,float& dx,float& dy) const {
         dx=x[to[e]]-x[u]; dy=y[to[e]]-y[u]; float l=hypotf(dx,dy);
         if(l>0.01f){ dx/=l; dy/=l; } else dx=dy=0;
@@ -198,15 +216,45 @@ static bool read_marker(float& mx,float& my){
     if(!rd(rec+0x50,&mx) || !rd(rec+0x54,&my)) return false;
     return sane(mx,my);
 }
-static void clear_route(){ g_route.clear(); g_endOk=false; }
+static void clear_route(){ g_route.clear(); }   // the destination (g_end*) stays: it does not depend on the route
+static volatile float g_dmMin=1e9f;               // closest the rider has been to the marker
+static int g_endA=-1, g_endB=-1;                  // road segment holding the destination
+// The destination is the point of road closest to the marker (anywhere along a segment, not just
+// at a graph node), independent of any route.  Recomputed when the marker or the level changes.
+static void set_dest(){
+    g_endOk=false; g_endA=g_endB=-1;
+    float qx,qy; int a,b;
+    if(g_cur && g_haveMarker && g_cur->closest_on_road(g_mx,g_my,qx,qy,a,b)){
+        g_endX=qx; g_endY=qy; g_endMk=hypotf(qx-g_mx,qy-g_my); g_endA=a; g_endB=b; g_endOk=true;
+    }
+}
+static void set_marker(float mx,float my){
+    g_mx=mx; g_my=my; g_haveMarker=true; clear_route(); g_arrived=false; g_dmMin=1e9f;
+    set_dest();
+}
+static void set_level(Graph* g){
+    if(g==g_cur) return;
+    g_cur=g; clear_route(); g_lastPlan=0; g_dmMin=1e9f; set_dest();
+    if(g) logf("{\"ev\":\"level\",\"name\":\"%s\"}",g->name);
+}
+static bool route_to(int n0,int t,std::vector<int>& p){
+    return g_cur->route(n0,t,p,g_hx,g_hy,g_uturnCost,FIRST_BAN) || g_cur->route(n0,t,p,g_hx,g_hy,g_uturnCost,g_uturnCost);
+}
+static float path_len(const std::vector<int>& p){
+    float l=0; for(size_t i=1;i<p.size();i++) l+=hypotf(g_cur->x[p[i]]-g_cur->x[p[i-1]],g_cur->y[p[i]]-g_cur->y[p[i-1]]); return l;
+}
 
 static void plan_from(int n0){
     clear_route(); g_prog=0; g_lastPlan=GetTickCount64();
-    int t=g_cur->nearest(g_mx,g_my,MARKER_SNAP);
-    if(t<0){ logf("{\"ev\":\"plan_fail\",\"why\":\"marker_off_road\",\"mx\":%.1f,\"my\":%.1f}",g_mx,g_my); return; }
-    if(!g_cur->route(n0,t,g_route,g_hx,g_hy,g_uturnCost,FIRST_BAN) && !g_cur->route(n0,t,g_route,g_hx,g_hy,g_uturnCost,g_uturnCost)){
-        logf("{\"ev\":\"plan_fail\",\"why\":\"no_route\"}"); return;
-    }
+    if(!g_endOk) set_dest();
+    if(!g_endOk){ logf("{\"ev\":\"plan_fail\",\"why\":\"no_destination\",\"mx\":%.1f,\"my\":%.1f}",g_mx,g_my); return; }
+    // Route onto the destination's segment and across it, so the rider passes the exact closest point.
+    std::vector<int> pa,pb; bool oa=route_to(n0,g_endA,pa), ob=route_to(n0,g_endB,pb);
+    if(!oa && !ob){ logf("{\"ev\":\"plan_fail\",\"why\":\"no_route\"}"); return; }
+    bool useA = oa && (!ob || path_len(pa)<=path_len(pb));
+    g_route = useA? pa : pb;
+    int other = useA? g_endB : g_endA;
+    if(g_route.size()<2 || g_route[g_route.size()-2]!=other) g_route.push_back(other);
     size_t n=g_route.size();
     g_cum.assign(n,0.f); g_rev.assign(n,0);
     for(size_t i=1;i<n;i++){ int a=g_route[i-1],b=g_route[i]; g_cum[i]=g_cum[i-1]+hypotf(g_cur->x[a]-g_cur->x[b],g_cur->y[a]-g_cur->y[b]); }
@@ -214,7 +262,6 @@ static void plan_from(int n0){
         int p=g_route[i-1],c=g_route[i],nx=g_route[i+1]; float dx=g_cur->x[c]-g_cur->x[p], dy=g_cur->y[c]-g_cur->y[p], l=hypotf(dx,dy);
         if(l>0.01f) g_rev[i]=g_cur->reverses(dx/l,dy/l,c,nx);
     }
-    g_endX=g_cur->x[g_route.back()]; g_endY=g_cur->y[g_route.back()]; g_endMk=hypotf(g_endX-g_mx,g_endY-g_my); g_endOk=true;
     logf("{\"ev\":\"plan\",\"level\":\"%s\",\"from\":[%.1f,%.1f],\"to\":[%.1f,%.1f],\"len\":%.0f}",
          g_cur->name,g_cur->x[n0],g_cur->y[n0],g_mx,g_my,g_cum.back());
 }
@@ -224,11 +271,27 @@ static int route_index_near(float x,float y){
     for(int k=lo;k<hi;k++){ int n=g_route[k]; float dx=g_cur->x[n]-x, dy=g_cur->y[n]-y, d=dx*dx+dy*dy; if(d<bd){ bd=d; best=k; } }
     return best;
 }
+// Route index of graph node n (first match at or after `from`, around the rider's progress), or -1.
+static int route_index_of(int n,int from){
+    int lo=std::max(0,from), hi=std::min((int)g_route.size(),g_prog+150);
+    for(int k=lo;k<hi;k++) if(g_route[k]==n) return k;
+    return -1;
+}
 static void update_progress(){
     if(!g_posOk) return;
     int lo=std::max(0,g_prog-10), hi=std::min((int)g_route.size(),g_prog+150), best=-1; float bd=25.f*25.f;
     for(int k=lo;k<hi;k++){ int n=g_route[k]; float dx=g_cur->x[n]-g_px, dy=g_cur->y[n]-g_py, d=dx*dx+dy*dy; if(d<bd){ bd=d; best=k; } }
     if(best>=0) g_prog=best;
+}
+// Distance from (x,y) to the route (its segments around the rider's progress).
+static float dist_to_route(float x,float y){
+    int lo=std::max(0,g_prog-10), hi=std::min((int)g_route.size()-1,g_prog+150); float bd=1e30f;
+    for(int k=lo;k<hi;k++){
+        int u=g_route[k], v=g_route[k+1]; float ax=g_cur->x[u], ay=g_cur->y[u], ex=g_cur->x[v]-ax, ey=g_cur->y[v]-ay, l2=ex*ex+ey*ey;
+        float t= l2>1e-6f ? ((x-ax)*ex+(y-ay)*ey)/l2 : 0.f; t=std::min(1.f,std::max(0.f,t));
+        float dx=ax+t*ex-x, dy=ay+t*ey-y; bd=std::min(bd,dx*dx+dy*dy);
+    }
+    return sqrtf(bd);
 }
 
 // ---------------- rider position (game thread for the entity lookup) ----------------
@@ -249,29 +312,35 @@ static bool player_pos(float& x,float& y){
 }
 
 // ---------------- road choice ----------------
+static void find_map();
 // Replacement for the angle filter at both chooser call sites (game thread).
 static bool FilterHook(float* dir, float* cur){
     bool vanilla=g_filter(dir,cur);
-    if(!g_on) return vanilla;
     uint64_t now=GetTickCount64(); g_hookT=now;
     refresh_entity(false);
+    find_map();
     float a[3],b[3];
     if(!rdn(*g_p0,a,12) || !rdn(*g_p1,b,12)) return vanilla;
     // heading from the rider's movement (none while standing still)
     if(g_posOk && g_headOk){ g_hx=g_mhx; g_hy=g_mhy; } else { g_hx=0; g_hy=0; }
-    static int miss=0;                            // level changed? candidates stop matching our graph
-    if(g_cur){
-        if(g_cur->nearest(a[0],a[1],1.0f)<0){ if(++miss>=30){ logf("{\"ev\":\"level_lost\"}"); g_cur=nullptr; clear_route(); miss=0; } }
-        else miss=0;
-    }
-    if(!g_cur){                                   // pick the level: the graph with a node exactly here
-        for(int i=0;i<g_ng;i++){ if(g_graphs[i].nearest(a[0],a[1],1.0f)>=0){ g_cur=&g_graphs[i]; logf("{\"ev\":\"level\",\"name\":\"%s\"}",g_cur->name); break; } }
+    // Which level are we on?  The game's road points are nodes of exactly one of our graphs.  Level
+    // coordinates overlap, so a guess made from the map (CpHook) can be wrong; the first few road
+    // points that match another level's graph but not the current one switch to it.
+    static Graph* other=nullptr; static int otherHits=0;
+    if(!g_cur || g_cur->nearest(a[0],a[1],1.0f)<0){
+        Graph* hit=nullptr;
+        for(int i=0;i<g_ng;i++) if(&g_graphs[i]!=g_cur && g_graphs[i].nearest(a[0],a[1],1.0f)>=0){ hit=&g_graphs[i]; break; }
+        if(hit){ otherHits = hit==other? otherHits+1 : 1; other=hit; }
+        if(hit && (!g_cur || otherHits>=3)){ set_level(hit); otherHits=0; }
         if(!g_cur) return vanilla;
-    }
+    } else otherHits=0;
     float mx,my;
     if(read_marker(mx,my)){
-        if(!g_haveMarker || hypotf(mx-g_mx,my-g_my)>5){ g_mx=mx; g_my=my; g_haveMarker=true; clear_route(); g_arrived=false; }
-    } else if(!g_haveMarker) return vanilla;
+        if(!g_haveMarker || hypotf(mx-g_mx,my-g_my)>5) set_marker(mx,my);
+    } else {                                      // no marker (removed): vanilla auto-follow
+        if(g_haveMarker && g_map && *g_map){ g_haveMarker=false; clear_route(); g_endOk=false; logf("{\"ev\":\"marker_removed\"}"); }
+        if(!g_haveMarker) return vanilla;
+    }
     if(g_arrived) return vanilla;                 // done until the marker moves
     int n0=g_cur->nearest(a[0],a[1],NODE_TOL);
     if(n0<0) return vanilla;
@@ -281,41 +350,76 @@ static bool FilterHook(float* dir, float* cur){
     // behind each point; those are refused and never count as being stuck.
     float cdx=b[0]-a[0], cdy=b[1]-a[1], cl=hypotf(cdx,cdy);
     bool ahead = !(g_hx||g_hy) || cl<0.01f || (cdx*g_hx+cdy*g_hy)/cl > 0.2f;
-    if(g_route.empty() && now-g_lastPlan>1500) plan_from(n0);
-    if(g_route.empty()) return vanilla;
+    // The route is planned once (shortest road route, starting the way the horse is moving) and
+    // kept.  It is recalculated only when the rider has actually left it: more than DEVIATE metres
+    // from the route for DEVIATE_MS (a wrong turn, a manual detour, pushed off by traffic).
+    int nr = g_posOk ? g_cur->nearest(g_px,g_py,50.f) : -1;
+    if(g_route.empty()){
+        if(now-g_lastPlan>1500) plan_from(nr>=0? nr : n0);
+        if(g_route.empty()) return vanilla;
+    } else if(g_posOk){
+        static uint64_t offT=0;
+        float dr=dist_to_route(g_px,g_py);
+        if(dr<=DEVIATE) offT=0;
+        else if(!offT) offT=now;
+        else if(now-offT>DEVIATE_MS && nr>=0){
+            logf("{\"ev\":\"left_route\",\"at\":[%.1f,%.1f],\"dist\":%.1f}",(float)g_px,(float)g_py,dr);
+            offT=0; plan_from(nr); if(g_route.empty()) return vanilla;
+        }
+    }
     update_progress();
     int ia=route_index_near(a[0],a[1]);
-    if(ia<0){                                     // off the route: replan from here (throttled)
-        if(!ahead) return vanilla;
-        if(now-g_lastPlan>1500){ plan_from(n0); if(g_route.empty()) return vanilla; ia=route_index_near(a[0],a[1]); }
-        if(ia<0) return vanilla;
-    }
+    if(ia<0) return vanilla;                      // a road not on the route (e.g. behind a junction): not ours to judge
     if(!g_posOk && g_cum.back()-g_cum[ia] <= g_arriveDist){     // fallback without a rider position
-        if(!g_arrived){ g_arrived=true; logf("{\"ev\":\"arrived\",\"left\":%.1f}",g_cum.back()-g_cum[ia]); if(g_brakeOn) SetEvent(g_brakeEvt); }
+        if(!g_arrived){ g_arrived=true; logf("{\"ev\":\"arrived\",\"left\":%.1f}",g_cum.back()-g_cum[ia]); }   // speed unknown: no brake
         return vanilla;
     }
     if(ia>=(int)g_route.size()-1) return vanilla;
     // The route turns back just ahead (a U-turn auto-follow cannot make, e.g. at a dead end):
-    // keep riding with the game's choice; the route is recalculated further on.
+    // keep riding with the game's choice; leaving the route triggers the recalculation.
     for(int k=ia;k<(int)g_route.size() && k<=ia+3;k++) if(g_rev[k]) return vanilla;
     // Accept a candidate that stays within the route corridor and makes progress along it.
-    int ib=route_index_near(b[0],b[1]);
-    bool follow = ib>ia && ib-ia<=15;
-    if(ib==ia) follow=vanilla;                    // tiny segment around one route point
+    // The game's road points are our graph nodes: when the candidate starts on a route node, only
+    // the route's own next road counts (a short side leg a few metres off it, e.g. the connectors
+    // of a triangular junction, would still be inside the corridor).
+    int na=g_cur->nearest(a[0],a[1],EXACT_TOL), nb=g_cur->nearest(b[0],b[1],EXACT_TOL);
+    int ea= na>=0 ? route_index_of(na,g_prog-10) : -1;
+    bool follow;
+    if(ea>=0 && nb>=0 && nb==na){
+        follow=vanilla;                           // the game's points are denser than ours: a step within one node
+    } else if(ea>=0 && nb>=0){
+        int eb=route_index_of(nb,ea+1);
+        follow = eb>ea && eb-ea<=15;
+    } else {
+        int ib=route_index_near(b[0],b[1]);
+        follow = ib>ia && ib-ia<=15;
+        if(ib==ia) follow=vanilla;                // tiny segment around one route point
+    }
     // Never push a standing horse (just mounted) onto a road the game itself refused.
     if(follow && !vanilla && !moving) follow=false;
     // Never leave the horse without a road: if every road ahead that the game offers keeps being
-    // refused, let the game choose for a moment and replan.
+    // refused, let the game choose for a moment.  The route is kept; if the game's choice takes the
+    // rider off it, the deviation check above recalculates.
+    // The same when nothing at all (ahead or not) has been accepted for a while as the horse moves.
+    static uint64_t noneT=0, lastCall=0;
+    if(follow || now-lastCall>300) noneT=0;
+    lastCall=now;
+    bool stuck=false;
+    if(!follow && vanilla && moving){
+        if(!noneT) noneT=now;
+        stuck = now-noneT > STUCK_NONE_MS;
+    }
     if(ahead && vanilla){
         if(follow) g_fwdRejectT=0;
         else {
             if(!g_fwdRejectT) g_fwdRejectT=now;
-            if(now-g_fwdRejectT > (moving? STUCK_MOVE_MS : STUCK_MS)){
-                g_fwdRejectT=0; g_yieldUntil=now+(moving?1200:2000); g_lastPlan=0; clear_route();
-                KC_DLOG("{\"ev\":\"yield\",\"at\":[%.1f,%.1f],\"speed\":%.1f}",a[0],a[1],(float)g_speed);
-                return vanilla;
-            }
+            stuck = stuck || now-g_fwdRejectT > (moving? STUCK_MOVE_MS : STUCK_MS);
         }
+    }
+    if(stuck){
+        g_fwdRejectT=0; noneT=0; g_yieldUntil=now+(moving?1200:2000);
+        KC_DLOG("{\"ev\":\"yield\",\"at\":[%.1f,%.1f],\"to\":[%.1f,%.1f],\"speed\":%.1f}",a[0],a[1],b[0],b[1],(float)g_speed);
+        return vanilla;
     }
     static uint64_t lastLog=0;
     if(follow!=vanilla && now-lastLog>200){
@@ -326,9 +430,16 @@ static bool FilterHook(float* dir, float* cur){
 
 // ---------------- route line on the map ----------------
 static Graph* graph_at(float x,float y){
-    if(g_cur && g_cur->nearest(x,y,40.f)>=0) return g_cur;
-    for(int i=0;i<g_ng;i++) if(g_graphs[i].nearest(x,y,40.f)>=0) return &g_graphs[i];
-    return nullptr;
+    // Level coordinates overlap, so once a level is known (set exactly from the road the horse is
+    // on) keep it.  Otherwise guess: the level whose roads are closest to both the rider and the
+    // marker (FilterHook corrects a wrong guess as soon as the horse is on a road).
+    if(g_cur) return g_cur;
+    Graph* best=nullptr; float bd=1e30f;
+    for(int i=0;i<g_ng;i++){
+        const Graph& g=g_graphs[i]; int n=g.nearest(x,y,MARKER_SNAP), m=g.nearest(g_mx,g_my,MARKER_SNAP); if(n<0||m<0) continue;
+        float d=hypotf(g.x[n]-x,g.y[n]-y)+hypotf(g.x[m]-g_mx,g.y[m]-g_my); if(d<bd){ bd=d; best=&g_graphs[i]; }
+    }
+    return best;
 }
 static void hide_route(void* map){               // HideFastTravelPath(Animation=false), as the game does
     if(!g_sendEvent) return;
@@ -338,7 +449,7 @@ static void hide_route(void* map){               // HideFastTravelPath(Animation
 static void draw_route(void* map,bool havePos,float px,float py){
     if(!g_showPath || !g_mapLine || !kc::is_a((uintptr_t)map,g_vtUIMap)) return;
     std::vector<Vec3f> pts;
-    if(g_on && !g_arrived && !g_route.empty() && g_cur){
+    if(!g_arrived && !g_route.empty() && g_cur){
         if(havePos) pts.push_back({px,py,0});
         float lx=1e9f,ly=1e9f;
         for(size_t k=(size_t)std::max(0,g_prog);k<g_route.size();k++){
@@ -354,18 +465,19 @@ static void draw_route(void* map,bool havePos,float px,float py){
 }
 // Called in place of the map's checkpoint getter (map screen, game thread).
 static void* CpHook(void* self,void* out){
+    if(*g_map && *g_map!=(uintptr_t)self) logf("{\"ev\":\"map_moved\"}");   // the early lookup found another object
     *g_map=(uintptr_t)self;
     void* r=g_cpget(self,out);
     __try {
         refresh_entity(true);
         float mx,my,px=0,py=0; bool havePos=player_pos(px,py), haveMk=read_marker(mx,my);
-        if(g_on && haveMk){
-            if(!g_haveMarker || hypotf(mx-g_mx,my-g_my)>5){ g_mx=mx; g_my=my; g_haveMarker=true; clear_route(); g_arrived=false; }
+        if(haveMk){
+            if(!g_haveMarker || hypotf(mx-g_mx,my-g_my)>5) set_marker(mx,my);
             if(g_route.empty() && havePos){                                // plan from where the rider is
                 Graph* gr=graph_at(px,py);
-                if(gr){ g_cur=gr; int n0=gr->nearest(px,py,40.f); if(n0>=0){ g_hx=g_headOk?g_mhx:0; g_hy=g_headOk?g_mhy:0; plan_from(n0); } }
+                if(gr){ set_level(gr); int n0=gr->nearest(px,py,MARKER_SNAP); if(n0>=0){ g_hx=g_headOk?g_mhx:0; g_hy=g_headOk?g_mhy:0; plan_from(n0); } }
             }
-        } else if(g_haveMarker && !haveMk){ g_haveMarker=false; clear_route(); }
+        } else if(g_haveMarker && !haveMk){ g_haveMarker=false; clear_route(); g_endOk=false; }
         draw_route(self,havePos,px,py);
     } __except(EXCEPTION_EXECUTE_HANDLER){ logf("{\"ev\":\"map_line_error\",\"msg\":\"map line disabled for this session\"}"); g_showPath=nullptr; }
     return r;
@@ -383,14 +495,18 @@ static void track_position(uint64_t now){
         if(vl>1.0f){ g_mhx=vx/vl; g_mhy=vy/vl; g_headOk=true; } else if(vl<0.5f) g_headOk=false;
     }
     lx=x; ly=y; lt=now; g_px=x; g_py=y; g_posOk=true;
-    if(g_on && g_endOk && !g_arrived && now-g_hookT<1500){           // riding on auto-follow with a route
-        // Arrived: at the route end, or already as close to the marker as the route end would get
-        // us (off-road markers: stop instead of weaving along the trails around it).
+    // Riding with a destination: auto-follow asked us about roads recently (it does not ask on long
+    // stretches without junctions, so allow a generous window) and the rider is moving.
+    if(g_endOk && !g_arrived && now-g_hookT<20000 && g_speed>1.5f){
+        // Arrived: at the point of road closest to the marker.  Fallback: came within reach of the
+        // marker and are now moving away again (took another road past it).
         float lead=g_arriveDist + g_speed*BRAKE_LEAD_S;
         float d=hypotf(x-g_endX,y-g_endY), dm=hypotf(x-g_mx,y-g_my);
-        if(d <= lead || dm <= g_endMk + lead){
+        if(dm<g_dmMin) g_dmMin=dm;
+        bool passed = g_dmMin <= g_endMk + lead + 8.f && dm > g_dmMin + 4.f;
+        if(d <= lead || passed){
             g_arrived=true;
-            logf("{\"ev\":\"arrived\",\"marker_dist\":%.1f,\"speed\":%.1f}",dm,(float)g_speed);
+            logf("{\"ev\":\"arrived\",\"marker_dist\":%.1f,\"end_dist\":%.1f,\"speed\":%.1f,\"why\":\"%s\"}",dm,d,(float)g_speed, d<=lead?"road_point":"passed");
             if(g_brakeOn) SetEvent(g_brakeEvt);
         }
     }
@@ -402,10 +518,12 @@ static DWORD WINAPI BrakeThread(LPVOID){
     for(;;){
         WaitForSingleObject(g_brakeEvt,INFINITE);
         DWORD pid=0; GetWindowThreadProcessId(GetForegroundWindow(),&pid);
-        if(pid!=GetCurrentProcessId()) continue;
+        if(pid!=GetCurrentProcessId()){ logf("{\"ev\":\"brake_skipped\",\"why\":\"game not focused\"}"); continue; }
+        float v0=g_speed;
         INPUT in={}; in.type=INPUT_KEYBOARD; in.ki.wScan=0x1F; in.ki.dwFlags=KEYEVENTF_SCANCODE;
-        SendInput(1,&in,sizeof(in)); Sleep(BRAKE_MS);
+        UINT sent=SendInput(1,&in,sizeof(in)); Sleep(BRAKE_MS);
         in.ki.dwFlags=KEYEVENTF_SCANCODE|KEYEVENTF_KEYUP; SendInput(1,&in,sizeof(in));
+        logf("{\"ev\":\"braked\",\"sent\":%u,\"speed_before\":%.1f,\"speed_after\":%.1f}",sent,v0,(float)g_speed);
     }
 }
 
@@ -488,18 +606,49 @@ extern "C" __declspec(dllexport) int KC_RouteTest(const char* dir,const char* lv
 }
 #endif
 
+// ---------------- map lookup without opening the map ----------------
+// The map screen (C_UIMap) lives inside the game's UI module (C_UIApse, +0x1508) from startup, and it
+// holds the custom marker. Found the way the game itself does it (0x2BA782B): game->[+0xE8] ->
+// UI-module getter, whose result is cached in a global. Optional: without it the route is planned
+// the first time the map is opened.
+typedef void* (*GetGame_t)(); typedef void* (*GetModule_t)(void*);
+static GetGame_t g_getGame=nullptr; static GetModule_t g_getApse=nullptr;
+static void* volatile* g_apseCache=nullptr; static uintptr_t g_vtApse=0;
+static void install_map_lookup(const kc::Image& im){
+    kc::Resolver R; R.im=im;
+    uintptr_t s=R.find("UI module call",SIG_APSE_REF);
+    uintptr_t gg=R.branch("game getter",s), ga=s?R.branch("UI module getter",s+12):0;
+    R.verify("UI module getter",ga,SIG_GETMODULE);
+    uintptr_t cache=ga?R.riprel("UI module cache",ga+16):0;
+    uintptr_t vt=R.vtable("C_UIApse",".?AVC_UIApse@guimodule@wh@@",0);
+    if(!R.ok()){ logf("{\"ev\":\"map_lookup_off\",\"msg\":\"open the map once after loading to plan the route\"}"); return; }
+    g_getGame=(GetGame_t)gg; g_apseCache=(void* volatile*)cache; g_vtApse=vt; g_getApse=(GetModule_t)ga;
+}
+static void find_map_now(){
+    uintptr_t apse=(uintptr_t)*g_apseCache;
+    if(!apse){ uintptr_t g=(uintptr_t)g_getGame(); void* mm=g?*(void**)(g+0xE8):nullptr; if(mm) apse=(uintptr_t)g_getApse(mm); }
+    if(!apse || !kc::is_a(apse,g_vtApse) || !kc::is_a(apse+0x1508,g_vtUIMap)) return;
+    *g_map=apse+0x1508;
+    float x,y; bool mk=read_marker(x,y);
+    logf("{\"ev\":\"map_found\",\"marker\":%d}",mk);
+}
+static void find_map(){                          // game thread
+    if(!g_getApse || *g_map) return;
+    static uint64_t t=0; uint64_t now=GetTickCount64(); if(now-t<2000) return; t=now;
+    __try { find_map_now(); } __except(EXCEPTION_EXECUTE_HANDLER){ g_getApse=nullptr; logf("{\"ev\":\"map_lookup_error\"}"); }
+}
+
 // ---------------- startup ----------------
 static HMODULE g_self=nullptr;
 static DWORD WINAPI Init(LPVOID){
     kc::init(g_self,"kcd2_autotravel");
-    kc::Hotkey key; key.vk=kc::ini_key("Toggle",VK_F6);
     g_brakeOn=kc::ini_int("Options","BrakeOnArrival",1)!=0;
     g_arriveDist=(float)kc::ini_int("Options","ArriveDistance",3);
     g_uturnCost=(float)kc::ini_int("Options","UTurnPenalty",400);
     g_mapLine=kc::ini_int("Options","MapRoute",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("{\"ev\":\"abort\",\"msg\":\"WHGame.dll not loaded\"}"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("{\"ev\":\"start\",\"version\":\"1.0.0\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
+    logf("{\"ev\":\"start\",\"version\":\"1.0.2\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
     Sites s{};
     if(!resolve(R,s)){ logf("{\"ev\":\"disabled\",\"msg\":\"this game version is not supported yet - nothing was changed\"}"); return 0; }
     g_filter=(Filter_t)s.filter; g_cpget=(CpGetter_t)s.cpget;
@@ -521,15 +670,15 @@ static DWORD WINAPI Init(LPVOID){
     emit_jmp_abs((void*)&CpHook);
     g_brakeEvt=CreateEventA(nullptr,FALSE,FALSE,nullptr); CreateThread(nullptr,0,BrakeThread,nullptr,0,nullptr);
     patch_call(s.fork,stubA); patch_call(s.snap,stubB); patch_call(s.cp,stubM);
-    char kn[16]; logf("{\"ev\":\"ready\",\"graphs\":%d,\"toggle\":\"%s\"}",g_ng,kc::key_name(key.vk,kn,sizeof kn));
+    install_map_lookup(R.im);
+    logf("{\"ev\":\"ready\",\"graphs\":%d}",g_ng);
     for(;;){
         Sleep(20);
         track_position_safe();
-        if(key.pressed()){ g_on=!g_on; logf("{\"ev\":\"toggle\",\"on\":%ld}",g_on); }
     }
 }
 
-KC_PLUGIN("Horse Route Follow", KC_AUTHOR, 100)
+KC_PLUGIN("Horse Route Follow", KC_AUTHOR, 102)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){
     if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); }
     return TRUE;

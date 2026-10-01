@@ -1,4 +1,4 @@
-HORSE ROUTE FOLLOW 1.0.0 - Kingdom Come: Deliverance II
+HORSE ROUTE FOLLOW 1.0.2 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 The game's horse auto-follow picks a branch at random at every fork. With this mod it follows
@@ -24,8 +24,8 @@ INSTALL
 HOW TO USE
   1. Open the map and place a custom marker. The planned route appears as a dotted line.
   2. Get on your horse, ride onto a road and let auto-follow take over as usual.
-  3. The horse follows the route and stops near the marker.
-  F6 turns the routing on and off (with it off, auto-follow behaves as vanilla).
+  3. The horse follows the route and stops on the road as close to the marker as it gets.
+  The mod is always on (no hotkey). Remove the marker to ride with vanilla auto-follow.
 
 HOW IT BEHAVES
   - GPS style: the route always starts in the direction you are travelling. Facing the wrong
@@ -34,14 +34,13 @@ HOW IT BEHAVES
   - The mod only chooses between roads the game's auto-follow offers. It never steers the horse
     itself, and it never leaves a moving horse without a road: if the game offers nothing that
     fits the route, the game's own choice wins and the route is recalculated.
-  - Markers away from roads route to the nearest road point; the horse stops when you are about
-    as close to the marker as the road gets.
+  - The horse stops at the point of road closest to the marker (also for markers placed away
+    from roads).
   - Some trails the game can auto-follow are not drawn on the map; routes may use them.
 
 SETTINGS  (Mods\horse_route_follow\KCSE\Plugins\kcd2_autotravel.ini)
-  [Keys]    Toggle=F6            routing on/off
   [Options] BrakeOnArrival=1     briefly hold S to stop the horse on arrival (0 = don't)
-            ArriveDistance=3     how close to the end of the route to stop, in metres
+            ArriveDistance=3     how many metres before that road point to stop
                                  (raise it if the horse overshoots, lower it if it stops short)
             UTurnPenalty=400     a later turn-around (dead end) counts as this many extra metres
             MapRoute=1           draw the route on the map (0 = don't)
@@ -49,8 +48,14 @@ SETTINGS  (Mods\horse_route_follow\KCSE\Plugins\kcd2_autotravel.ini)
 
 KNOWN ISSUES AND LIMITATIONS
   - Only tested with the Steam version of the game (1.5.x, build 15693).
+  - Hardcore mode is not supported in 1.0.2; it has not been tested yet.
   - Regions: Trosecko is well tested; Kuttenberg and the monastery map are included but have had
     little testing.
+  - Routes can sometimes take an odd detour even when a more direct main road exists. This is a
+    known bug in how the mod reads the game's road network; the route is still valid and gets you
+    there. A fix is planned.
+  - Starting while facing away from the marker: the horse cannot turn around by itself, so the
+    route continues ahead and loops back. Turn the horse around yourself for the direct route.
   - Only roads the game can auto-follow are used, so routes can differ from what the map shows,
     and a marker far from any road is reached only as far as the nearest road point.
   - At a road that simply ends, the horse stops; turn around and it continues.
@@ -81,3 +86,13 @@ CREDITS
 
 LICENSE
   GNU GPL v3 (LICENSE.txt). The source code is available as a separate download on the Nexus page.
+
+CHANGES
+  1.0.2  - No more on/off hotkey: the mod is always active (an accidental F6 press - or another
+           mod using F6 - could silently switch it off).
+         - The horse now stops at the point of road closest to the marker, also on long straight
+           roads without junctions (it could ride past the marker there).
+         - Fixed the first route of a session sometimes being planned on the wrong region's roads
+           until the mod was toggled.
+         - The route is planned once and kept. It is only recalculated when you actually leave it
+           (more than 15 m off the route), not every time the game's look-ahead strays from it.
