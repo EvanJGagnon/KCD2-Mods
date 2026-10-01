@@ -85,7 +85,7 @@ CREDITS
     game's own files at build time; no game files are redistributed.
 
 LICENSE
-  GNU GPL v3 (LICENSE.txt). The source code is available as a separate download on the Nexus page.
+  GNU GPL v3 (LICENSE.txt). Source code: https://github.com/EvanJGagnon/KCD2-Mods
 
 CHANGES
   1.0.2  - No more on/off hotkey: the mod is always active (an accidental F6 press - or another
