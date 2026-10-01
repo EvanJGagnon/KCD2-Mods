@@ -6,6 +6,7 @@ Native (C++) mods for **Kingdom Come: Deliverance II**, loaded by the
 | Mod | What it does | Key |
 |---|---|---|
 | **[Horse Route Follow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3742)** | Horse auto-follow takes the right turn at every fork to reach your custom map marker. The route is drawn on the map like fast travel, the route is recalculated only if you leave it, and the horse stops on the road closest to the marker. Always on while a marker is placed. | none |
+| **Hardcore Map Markers** (optional file of Horse Route Follow) | Allows custom map markers in hardcore mode (map only, not the compass), so Horse Route Follow works there too. | none |
 | **[Theatrical AutoForge](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3743)** | Henry forges the chosen piece himself, stroke by stroke: heating, bellows, hammering in rhythm, flipping, reheating and quench - all through the game's own forge actions. | F9 |
 | **[Theatrical Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3744)** | Henry brews the recipe open in the alchemy book on screen, step by step and in real time. **An adaptation of [Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3394) by JerryYOJ** (see below). | F8 |
 
@@ -43,6 +44,7 @@ instead of crashing. See [`src/kcd2_common.h`](src/kcd2_common.h).
 src/kcd2_common.h    shared runtime: signature scanner, RTTI lookup, fail-safe resolver,
                      .ini settings, logging, KCSE plugin entry points
 src/autotravel.cpp   Horse Route Follow    -> kcd2_autotravel.dll
+src/hardcore_markers.cpp  Hardcore Map Markers  -> kcd2_hardcore_markers.dll
 src/autoforge.cpp    Theatrical AutoForge  -> kcd2_autoforge.dll
 src/alchemy.cpp      Theatrical Autobrew   -> kcd2_alchemy.dll
 data/                road graphs (*.amg) and the recipe table, generated from the game's own data

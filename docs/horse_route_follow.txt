@@ -1,4 +1,4 @@
-HORSE ROUTE FOLLOW 1.0.2 - Kingdom Come: Deliverance II
+HORSE ROUTE FOLLOW 1.1.0 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 The game's horse auto-follow picks a branch at random at every fork. With this mod it follows
@@ -20,6 +20,14 @@ INSTALL
   Manual: copy the "horse_route_follow" folder from this archive into <game>\Mods\
           (you should end up with <game>\Mods\horse_route_follow\KCSE\Plugins\kcd2_autotravel.dll).
   Uninstall: delete that folder.
+  The mod's on-screen text (Localization folder) is only loaded if "horse_route_follow" is listed in
+  <game>\Mods\mod_order.txt. Vortex takes care of that; with a manual install, add the line yourself
+  if that file exists. Without it the mod still works, the "wrong way" notice just doesn't show.
+
+HARDCORE MODE
+  Hardcore does not allow custom map markers, so on its own the mod has nothing to route to there.
+  The optional file "Hardcore Map Markers" (same Nexus page) allows custom markers in hardcore - on
+  the map only, not on the compass - and the mod then works exactly as in a normal game.
 
 HOW TO USE
   1. Open the map and place a custom marker. The planned route appears as a dotted line.
@@ -28,9 +36,12 @@ HOW TO USE
   The mod is always on (no hotkey). Remove the marker to ride with vanilla auto-follow.
 
 HOW IT BEHAVES
-  - GPS style: the route always starts in the direction you are travelling. Facing the wrong
-    way or taking a wrong turn does not stop the horse; the route is recalculated from where
-    you are.
+  - The route is the shortest one by road. When you start off, the mod checks which way the
+    horse faces: if you are heading away from the route, "Wrong way - turn around" is shown
+    while you ride that way (the horse cannot turn around by itself). Turn around and the route
+    continues; keep going and it is recalculated from where you are.
+  - Once riding, the route is kept and only recalculated if you actually leave it (a wrong
+    turn, a detour, pushed off the road by traffic).
   - The mod only chooses between roads the game's auto-follow offers. It never steers the horse
     itself, and it never leaves a moving horse without a road: if the game offers nothing that
     fits the route, the game's own choice wins and the route is recalculated.
@@ -48,14 +59,13 @@ SETTINGS  (Mods\horse_route_follow\KCSE\Plugins\kcd2_autotravel.ini)
 
 KNOWN ISSUES AND LIMITATIONS
   - Only tested with the Steam version of the game (1.5.x, build 15693).
-  - Hardcore mode is not supported in 1.0.2; it has not been tested yet.
   - Regions: Trosecko is well tested; Kuttenberg and the monastery map are included but have had
     little testing.
   - Routes can sometimes take an odd detour even when a more direct main road exists. This is a
     known bug in how the mod reads the game's road network; the route is still valid and gets you
     there. A fix is planned.
-  - Starting while facing away from the marker: the horse cannot turn around by itself, so the
-    route continues ahead and loops back. Turn the horse around yourself for the direct route.
+  - The horse cannot turn around by itself: when you start off facing away from the route you
+    are told to turn around (see HOW IT BEHAVES).
   - Only roads the game can auto-follow are used, so routes can differ from what the map shows,
     and a marker far from any road is reached only as far as the nearest road point.
   - At a road that simply ends, the horse stops; turn around and it continues.
@@ -88,6 +98,11 @@ LICENSE
   GNU GPL v3 (LICENSE.txt). Source code: https://github.com/EvanJGagnon/KCD2-Mods
 
 CHANGES
+  1.1.0  - Orientation check: starting off facing away from the route shows "Wrong way - turn
+           around" (only while actually riding the road the wrong way) and keeps the route,
+           instead of quietly planning a detour ahead.
+         - Optional file "Hardcore Map Markers": custom map markers in hardcore mode (map only,
+           not the compass), so the mod works there too.
   1.0.2  - No more on/off hotkey: the mod is always active (an accidental F6 press - or another
            mod using F6 - could silently switch it off).
          - The horse now stops at the point of road closest to the marker, also on long straight

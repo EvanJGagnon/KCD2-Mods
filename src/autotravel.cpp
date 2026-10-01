@@ -42,6 +42,15 @@ static const char* SIG_SHOWPATH = "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 50 
 // The game hiding that line: string ctor, SendEvent(element, "HideFastTravelPath", bool&), string dtor.  (0x1F4D2CE)
 static const char* SIG_HIDEPATH = "48 8D 15 ?? ?? ?? ?? 48 8B 59 10 48 8D 4C 24 40 C6 44 24 38 01 E8 ?? ?? ?? ?? 4C 8D 44 24 38 48 8D 54 24 40 48 8D 8B 08 02 00 00 E8 ?? ?? ?? ?? 48 8D 4C 24 40 E8 ?? ?? ?? ?? 48 8B 5C 24 20";
 
+// On-screen notice: CScriptSystem::Update (vtbl[1], every frame, game thread) is hooked so the mod can
+// run one line of game script there: Game.SendInfoText("@hrf_wrong_way") (text in the mod's Localization).
+static const char* SIG_SS_UPDATE = "48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 30 48 8B 3D ?? ?? ?? ?? 48 8B F1 33 D2 0F 29 74 24 20";   // 0xA26B94
+static const char* SIG_SS_EXEC   = "48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 83 EC 50 48 8B F9 48 89 50 E8"; // vtbl[6] ExecuteBuffer 0x4D4484
+// Hardcore mode hides custom markers: the map's marker refresh returns early when the game mode is 2.
+// A marker placed earlier (e.g. with the Hardcore Map Markers add-on) can still be stored, invisible,
+// so the mod ignores markers in hardcore unless that check has been removed (the add-on is active).
+// Read only: the game-mode object and the "je" (+0x1C) after cmp eax,2.   (0xDCB1BF)
+static const char* SIG_GAMEMODE = "48 8B 0D ?? ?? ?? ?? 48 8B 01 FF 90 18 01 00 00 48 8B C8 48 8B 10 FF 52 10 83 F8 02 ?? ?? ?? ?? ?? ?? 48 8D 54 24 20 48 8B CB E8";
 static const char* SIG_APSE_REF  = "E8 ?? ?? ?? ?? 48 8B 88 E8 00 00 00 E8 ?? ?? ?? ?? 48 8D 54 24 78 48 8D 88 08 15 00 00"; // 0x2BA782B: game->UI module->map
 static const char* SIG_GETMODULE = "48 89 5C 24 08 56 57 41 56 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 48 85 C0 75";   // UI module getter 0x5677CC
 
@@ -54,6 +63,8 @@ static const float    FIRST_BAN     = 1e6f;    // cost of starting a route backw
 static const uint64_t STUCK_MS      = 400;     // standing: every road ahead refused this long -> let the game choose
 static const uint64_t STUCK_MOVE_MS = 150;     // moving:   every road ahead refused this long -> let the game choose
 static const uint64_t STUCK_NONE_MS = 900;     // moving:   no road accepted at all this long -> let the game choose
+static const float    SHOW_SPEED    = 6.5f;    // wrong-way notice only above this speed (m/s): riding, not walking about
+static const float    WRONG_WAY_M   = 60.0f;   // riding on the wrong way this far from the route -> recalculate
 static const float    DEVIATE       = 15.0f;   // rider this far from the route ...
 static const uint64_t DEVIATE_MS    = 1000;    // ... for this long = left the route: recalculate
 static const float    BRAKE_LEAD_S  = 0.4f;    // brake earlier by this many seconds of travel
@@ -92,6 +103,9 @@ static HANDLE g_brakeEvt = nullptr;
 static volatile uintptr_t g_ent=0; static uint64_t g_entT=0;
 static volatile float g_px=0,g_py=0,g_speed=0; static volatile bool g_posOk=false;
 static volatile float g_mhx=0,g_mhy=0; static volatile bool g_headOk=false;             // movement heading
+static volatile float g_fx=0,g_fy=0;   static volatile bool g_faceOk=false;             // facing (rider's forward axis)
+static volatile bool g_wrongWay=false, g_showWrong=false; static uint64_t g_wrongT=0;               // orientation stage: facing away
+static volatile uint64_t g_moveT=0;                                                      // when the horse last started moving
 static volatile float g_endX=0,g_endY=0,g_endMk=0; static volatile bool g_endOk=false;  // route end, its distance to the marker
 static volatile uint64_t g_hookT=0;                                                     // last time auto-follow asked us
 static volatile bool g_arrived=false;
@@ -237,14 +251,45 @@ static void set_level(Graph* g){
     g_cur=g; clear_route(); g_lastPlan=0; g_dmMin=1e9f; set_dest();
     if(g) logf("{\"ev\":\"level\",\"name\":\"%s\"}",g->name);
 }
+// ---------------- hardcore: markers the map does not show ----------------
+static void** g_gmGlobal=nullptr; static uintptr_t g_hcJump=0;
+typedef void* (*GetObj_t)(void*); typedef int (*GetMode_t)(void*);
+static int game_mode(){                           // as the map does: [global]->vtbl[0x118/8]() ->vtbl[2]()
+    void* g=*g_gmGlobal; if(!g) return -1;
+    void* o=((GetObj_t)(*(void***)g)[0x118/8])(g); if(!o) return -1;
+    return ((GetMode_t)(*(void***)o)[2])(o);
+}
+static bool markers_hidden(){                     // game thread
+    if(!g_gmGlobal || !g_hcJump) return false;
+    if(*(uint16_t*)g_hcJump==0x9090) return false; // hardcore check removed (Hardcore Map Markers add-on)
+    int m=-1; __try { m=game_mode(); } __except(EXCEPTION_EXECUTE_HANDLER){ g_gmGlobal=nullptr; return false; }
+    return m==2;
+}
+
+// Applies the current marker state; true if there is a destination to route to.
+static bool sync_destination(bool mk,float mx,float my){
+    if(mk && markers_hidden()){                   // hardcore without the add-on: a stored marker is invisible
+        static bool said=false; if(!said){ said=true; logf("{\"ev\":\"hardcore_marker_ignored\"}"); }
+        mk=false;
+    }
+    if(mk){ if(!g_haveMarker || hypotf(mx-g_mx,my-g_my)>5) set_marker(mx,my); return true; }
+    if(g_haveMarker && g_map && *g_map){ g_haveMarker=false; clear_route(); g_endOk=false; logf("{\"ev\":\"marker_removed\"}"); }
+    return false;
+}
+static bool g_planFree=false;                     // plan_from: may the route start behind the horse?
 static bool route_to(int n0,int t,std::vector<int>& p){
+    if(g_planFree) return g_cur->route(n0,t,p,g_hx,g_hy,g_uturnCost,0.f);
     return g_cur->route(n0,t,p,g_hx,g_hy,g_uturnCost,FIRST_BAN) || g_cur->route(n0,t,p,g_hx,g_hy,g_uturnCost,g_uturnCost);
 }
 static float path_len(const std::vector<int>& p){
     float l=0; for(size_t i=1;i<p.size();i++) l+=hypotf(g_cur->x[p[i]]-g_cur->x[p[i-1]],g_cur->y[p[i]]-g_cur->y[p[i-1]]); return l;
 }
 
-static void plan_from(int n0){
+// Plans from graph node n0.  free=true (horse standing): the truly shortest route, even if it starts
+// behind the horse -- the orientation stage then turns the horse around.  free=false (moving): the
+// shortest route that starts the way the horse is going.
+static void plan_from(int n0,bool free=false){
+    g_planFree=free; g_wrongWay=false; g_showWrong=false;
     clear_route(); g_prog=0; g_lastPlan=GetTickCount64();
     if(!g_endOk) set_dest();
     if(!g_endOk){ logf("{\"ev\":\"plan_fail\",\"why\":\"no_destination\",\"mx\":%.1f,\"my\":%.1f}",g_mx,g_my); return; }
@@ -283,6 +328,13 @@ static void update_progress(){
     for(int k=lo;k<hi;k++){ int n=g_route[k]; float dx=g_cur->x[n]-g_px, dy=g_cur->y[n]-g_py, d=dx*dx+dy*dy; if(d<bd){ bd=d; best=k; } }
     if(best>=0) g_prog=best;
 }
+// Does direction (dx,dy) point away from the route ahead of the rider (the point ~20 m further along)?
+static bool against_route(float dx,float dy){
+    if(g_route.size()<2 || !g_posOk) return false;
+    int k=g_prog; while(k+1<(int)g_route.size() && g_cum[k]-g_cum[g_prog]<20.f) k++;
+    float tx=g_cur->x[g_route[k]]-g_px, ty=g_cur->y[g_route[k]]-g_py, l=hypotf(tx,ty);
+    return l>3.f && (tx*dx+ty*dy)/l < -0.3f;
+}
 // Distance from (x,y) to the route (its segments around the rider's progress).
 static float dist_to_route(float x,float y){
     int lo=std::max(0,g_prog-10), hi=std::min((int)g_route.size()-1,g_prog+150); float bd=1e30f;
@@ -311,18 +363,32 @@ static bool player_pos(float& x,float& y){
     return rd(e+0x64,&x) && rd(e+0x74,&y) && sane(x,y);
 }
 
+// ---------------- on-screen notice ----------------
+typedef void* (*SsUpdate_t)(void*,void*,void*,void*);
+typedef bool  (*SsExec_t)(void*,const char*,size_t,const char*,void*);
+static SsUpdate_t g_ssUpdate=nullptr; static SsExec_t g_ssExec=nullptr;
+static const char* volatile g_notice=nullptr;    // script line to run on the next frame
+static void notify(const char* line){ if(g_ssExec) g_notice=line; }
+static const char* const WRONG_WAY_LINE = "Game.SendInfoText(\"@hrf_wrong_way\", true)";
+static volatile uint64_t g_sayT=0;               // last time the wrong-way notice was shown
+
 // ---------------- road choice ----------------
 static void find_map();
 // Replacement for the angle filter at both chooser call sites (game thread).
 static bool FilterHook(float* dir, float* cur){
     bool vanilla=g_filter(dir,cur);
     uint64_t now=GetTickCount64(); g_hookT=now;
+    if(kc::g_debug){                              // diagnostics: is the chooser asking while the horse starts off?
+        static uint64_t dt=0;
+        if(now-dt>500){ dt=now; KC_DLOG("{\"ev\":\"ask\",\"speed\":%.1f,\"since_move\":%lld,\"face\":[%.2f,%.2f],\"route\":%d,\"prog\":%d,\"turn\":%d}",
+            (float)g_speed,(long long)(g_headOk? (long long)(now-g_moveT) : -1),(float)g_fx,(float)g_fy,(int)g_route.size(),g_prog,(int)g_wrongWay); }
+    }
     refresh_entity(false);
     find_map();
     float a[3],b[3];
     if(!rdn(*g_p0,a,12) || !rdn(*g_p1,b,12)) return vanilla;
-    // heading from the rider's movement (none while standing still)
-    if(g_posOk && g_headOk){ g_hx=g_mhx; g_hy=g_mhy; } else { g_hx=0; g_hy=0; }
+    // heading: the rider's movement; standing still, the way the horse faces
+    if(g_posOk && g_headOk){ g_hx=g_mhx; g_hy=g_mhy; } else if(g_faceOk){ g_hx=g_fx; g_hy=g_fy; } else { g_hx=0; g_hy=0; }
     // Which level are we on?  The game's road points are nodes of exactly one of our graphs.  Level
     // coordinates overlap, so a guess made from the map (CpHook) can be wrong; the first few road
     // points that match another level's graph but not the current one switch to it.
@@ -334,13 +400,8 @@ static bool FilterHook(float* dir, float* cur){
         if(hit && (!g_cur || otherHits>=3)){ set_level(hit); otherHits=0; }
         if(!g_cur) return vanilla;
     } else otherHits=0;
-    float mx,my;
-    if(read_marker(mx,my)){
-        if(!g_haveMarker || hypotf(mx-g_mx,my-g_my)>5) set_marker(mx,my);
-    } else {                                      // no marker (removed): vanilla auto-follow
-        if(g_haveMarker && g_map && *g_map){ g_haveMarker=false; clear_route(); g_endOk=false; logf("{\"ev\":\"marker_removed\"}"); }
-        if(!g_haveMarker) return vanilla;
-    }
+    float mx=0,my=0; bool mk=read_marker(mx,my);
+    if(!sync_destination(mk,mx,my)) return vanilla;   // no destination: vanilla auto-follow
     if(g_arrived) return vanilla;                 // done until the marker moves
     int n0=g_cur->nearest(a[0],a[1],NODE_TOL);
     if(n0<0) return vanilla;
@@ -355,16 +416,16 @@ static bool FilterHook(float* dir, float* cur){
     // from the route for DEVIATE_MS (a wrong turn, a manual detour, pushed off by traffic).
     int nr = g_posOk ? g_cur->nearest(g_px,g_py,50.f) : -1;
     if(g_route.empty()){
-        if(now-g_lastPlan>1500) plan_from(nr>=0? nr : n0);
+        if(now-g_lastPlan>1500) plan_from(nr>=0? nr : n0, !moving || (g_speed<6.f && now-g_moveT<3000));
         if(g_route.empty()) return vanilla;
-    } else if(g_posOk){
+    } else if(g_posOk && !(g_wrongWay && dist_to_route(g_px,g_py)<WRONG_WAY_M)){   // (not while waiting for a turn-around)
         static uint64_t offT=0;
         float dr=dist_to_route(g_px,g_py);
         if(dr<=DEVIATE) offT=0;
         else if(!offT) offT=now;
         else if(now-offT>DEVIATE_MS && nr>=0){
             logf("{\"ev\":\"left_route\",\"at\":[%.1f,%.1f],\"dist\":%.1f}",(float)g_px,(float)g_py,dr);
-            offT=0; plan_from(nr); if(g_route.empty()) return vanilla;
+            offT=0; plan_from(nr,!moving); if(g_route.empty()) return vanilla;
         }
     }
     update_progress();
@@ -470,14 +531,11 @@ static void* CpHook(void* self,void* out){
     void* r=g_cpget(self,out);
     __try {
         refresh_entity(true);
-        float mx,my,px=0,py=0; bool havePos=player_pos(px,py), haveMk=read_marker(mx,my);
-        if(haveMk){
-            if(!g_haveMarker || hypotf(mx-g_mx,my-g_my)>5) set_marker(mx,my);
-            if(g_route.empty() && havePos){                                // plan from where the rider is
-                Graph* gr=graph_at(px,py);
-                if(gr){ set_level(gr); int n0=gr->nearest(px,py,MARKER_SNAP); if(n0>=0){ g_hx=g_headOk?g_mhx:0; g_hy=g_headOk?g_mhy:0; plan_from(n0); } }
-            }
-        } else if(g_haveMarker && !haveMk){ g_haveMarker=false; clear_route(); g_endOk=false; }
+        float mx=0,my=0,px=0,py=0; bool havePos=player_pos(px,py), haveMk=read_marker(mx,my);
+        if(sync_destination(haveMk,mx,my) && g_route.empty() && havePos){   // plan from where the rider is
+            Graph* gr=graph_at(px,py);
+            if(gr){ set_level(gr); int n0=gr->nearest(px,py,MARKER_SNAP); if(n0>=0){ bool mv=g_headOk; g_hx=mv?g_mhx:(g_faceOk?g_fx:0); g_hy=mv?g_mhy:(g_faceOk?g_fy:0); plan_from(n0,!mv); } }
+        }
         draw_route(self,havePos,px,py);
     } __except(EXCEPTION_EXECUTE_HANDLER){ logf("{\"ev\":\"map_line_error\",\"msg\":\"map line disabled for this session\"}"); g_showPath=nullptr; }
     return r;
@@ -492,9 +550,15 @@ static void track_position(uint64_t now){
         float dt=(now-lt)/1000.f, ix=(x-lx)/dt, iy=(y-ly)/dt, v=hypotf(ix,iy);
         if(v<40.f){ vx=vx*0.85f+ix*0.15f; vy=vy*0.85f+iy*0.15f; g_speed=g_speed*0.8f+v*0.2f; }
         float vl=hypotf(vx,vy);
-        if(vl>1.0f){ g_mhx=vx/vl; g_mhy=vy/vl; g_headOk=true; } else if(vl<0.5f) g_headOk=false;
+        if(vl>1.0f){ if(!g_headOk) g_moveT=now; g_mhx=vx/vl; g_mhy=vy/vl; g_headOk=true; } else if(vl<0.5f) g_headOk=false;
     }
     lx=x; ly=y; lt=now; g_px=x; g_py=y; g_posOk=true;
+    {   // facing: the entity's forward (Y) axis, world matrix at +0x58 (row-major 3x4: m01 @+0x5C, m11 @+0x6C)
+        float fx=0,fy=0; uintptr_t e=g_ent;
+        if(e && rd(e+0x5C,&fx) && rd(e+0x6C,&fy) && std::isfinite(fx) && std::isfinite(fy)){
+            float l=hypotf(fx,fy); if(l>0.3f && l<1.5f){ g_fx=fx/l; g_fy=fy/l; g_faceOk=true; } else g_faceOk=false;
+        } else g_faceOk=false;
+    }
     // Riding with a destination: auto-follow asked us about roads recently (it does not ask on long
     // stretches without junctions, so allow a generous window) and the rider is moving.
     if(g_endOk && !g_arrived && now-g_hookT<20000 && g_speed>1.5f){
@@ -561,12 +625,14 @@ struct Sites { uintptr_t fork, snap, cp, filter, cpget, fwglob, vtca, vtent, sho
 // Live reload (development builds only): the stub page records the game's original call targets,
 // so a newer copy injected into a running game can take the call sites over from the old one.
 static const uint64_t PAGE_MAGIC=0x4547415054414B43ull;   // "CKATPAGE"
-struct PageInfo { uint64_t magic; uintptr_t filter, cpget; };
+struct PageInfo { uint64_t magic; uintptr_t filter, cpget, ssUpdate; };
+static PageInfo g_prev{};                         // the copy this one takes over from
 static const size_t PAGE_INFO=0xF80;
 static uintptr_t taken_over(uintptr_t site,bool getter){
     if(!site || *(uint8_t*)site!=0xE8) return 0;
     uintptr_t t=kc::rel32(site+1), pg=t&~(uintptr_t)0xFFF;
     PageInfo pi{}; if(!rdn(pg+PAGE_INFO,&pi,sizeof pi) || pi.magic!=PAGE_MAGIC) return 0;
+    g_prev=pi;
     return getter? pi.cpget : pi.filter;
 }
 #endif
@@ -605,6 +671,72 @@ extern "C" __declspec(dllexport) int KC_RouteTest(const char* dir,const char* lv
     return p.size()>1 && g.reverses(hx,hy,p[0],p[1]);
 }
 #endif
+
+static void run_notice(void* ss){
+    const char* line=(const char*)InterlockedExchangePointer((void* volatile*)&g_notice,nullptr);
+    if(line) g_ssExec(ss,line,strlen(line),"HorseRouteFollow",nullptr);
+}
+// Orientation stage (game thread, ~10 times a second from the script-system hook: the road chooser
+// is not asked on straight roads, so it cannot drive this).
+static void orient_step(uint64_t now){
+    if(!g_cur || g_route.empty() || !g_haveMarker || g_arrived || !g_posOk){ g_wrongWay=false; g_showWrong=false; return; }
+    update_progress();
+    // Orientation stage.  Auto-follow cannot turn a horse around, so when the horse stands (or is just
+    // moving off) facing away from the route, the rider is told to turn around and the route is
+    // kept.  Turning around simply continues it; riding on the wrong way for WRONG_WAY_M recalculates
+    // (quietly).  Only a real facing-away start warns: routes planned while moving always start ahead.
+    // "Standing" includes the first seconds of moving off.
+    bool moving=g_posOk && g_speed>1.5f;
+    bool starting = !moving || (g_speed<6.f && now-g_moveT<3000);
+    if(starting && g_faceOk && g_planFree){
+        bool w=against_route(g_fx,g_fy);
+        if(w && !g_wrongWay){
+            g_wrongWay=true; g_wrongT=now;
+            logf("{\"ev\":\"wrong_way\",\"at\":[%.1f,%.1f],\"facing\":[%.2f,%.2f]}",(float)g_px,(float)g_py,(float)g_fx,(float)g_fy);
+        }
+        if(!w && g_wrongWay){ g_wrongWay=false; logf("{\"ev\":\"facing_route\"}"); }
+    }
+    if(moving && !starting){
+        bool along=!against_route(g_mhx,g_mhy);
+        if(g_wrongWay){
+            if(along){ g_wrongWay=false; logf("{\"ev\":\"turned\",\"secs\":%.1f}",(now-g_wrongT)/1000.f); }
+            else if(g_posOk && dist_to_route(g_px,g_py)>=WRONG_WAY_M){ g_wrongWay=false; logf("{\"ev\":\"wrong_way_replan\"}"); }
+        }
+    }
+    // Show the notice only while really riding the wrong way: at riding speed (canter or faster, so
+    // neither standing, walking the horse about nor running on foot), on a road, and moving (not just
+    // facing) away from the route.
+    g_showWrong = g_wrongWay && g_posOk && g_headOk && g_speed>SHOW_SPEED && against_route(g_mhx,g_mhy)
+                  && g_cur->nearest(g_px,g_py,8.f)>=0;
+}
+static void* SsUpdateHook(void* self,void* a,void* b,void* c){
+    void* r=g_ssUpdate(self,a,b,c);
+    // The wrong-way notice stays up (re-sent every 2.5 s) while the horse is actually riding the road
+    // away from the route on auto-follow (see g_showWrong); never while standing or wandering about.
+    uint64_t now=GetTickCount64();
+    static uint64_t ot=0;
+    if(now-ot>=100){ ot=now; __try { orient_step(now); } __except(EXCEPTION_EXECUTE_HANDLER){ g_wrongWay=g_showWrong=false; } }
+    if(g_showWrong && now-g_sayT>2500){ g_sayT=now; notify(WRONG_WAY_LINE); }
+    if(g_notice && g_ssExec){ __try { run_notice(self); } __except(EXCEPTION_EXECUTE_HANDLER){ g_ssExec=nullptr; logf("{\"ev\":\"notice_error\"}"); } }
+    return r;
+}
+// Optional: without it the mod works, just without the wrong-way notice.
+static void install_notices(const kc::Image& im){
+    kc::Resolver R; R.im=im;
+    uintptr_t vt=R.vtable("CScriptSystem",".?AVCScriptSystem@@",0), up=0;
+#ifdef KC_DEVTOOLS
+    if(g_prev.ssUpdate && vt){ up=g_prev.ssUpdate; R.verify("CScriptSystem::Update",up,SIG_SS_UPDATE); }   // live reload: slot holds the old copy\"s hook
+    else
+#endif
+    up=R.slot("CScriptSystem::Update",vt,1,SIG_SS_UPDATE);
+    uintptr_t ex=R.slot("CScriptSystem::ExecuteBuffer",vt,6,SIG_SS_EXEC);
+    if(!R.ok()){ logf("{\"ev\":\"notices_off\",\"msg\":\"on-screen notices not available in this game version\"}"); return; }
+    g_ssExec=(SsExec_t)ex; g_ssUpdate=(SsUpdate_t)up;
+    kc::write_ptr(&((void**)vt)[1],(void*)&SsUpdateHook);
+#ifdef KC_DEVTOOLS
+    ((PageInfo*)(g_page+PAGE_INFO))->ssUpdate=up;
+#endif
+}
 
 // ---------------- map lookup without opening the map ----------------
 // The map screen (C_UIMap) lives inside the game's UI module (C_UIApse, +0x1508) from startup, and it
@@ -648,7 +780,7 @@ static DWORD WINAPI Init(LPVOID){
     g_mapLine=kc::ini_int("Options","MapRoute",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("{\"ev\":\"abort\",\"msg\":\"WHGame.dll not loaded\"}"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("{\"ev\":\"start\",\"version\":\"1.0.2\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
+    logf("{\"ev\":\"start\",\"version\":\"1.1.0\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
     Sites s{};
     if(!resolve(R,s)){ logf("{\"ev\":\"disabled\",\"msg\":\"this game version is not supported yet - nothing was changed\"}"); return 0; }
     g_filter=(Filter_t)s.filter; g_cpget=(CpGetter_t)s.cpget;
@@ -659,7 +791,7 @@ static DWORD WINAPI Init(LPVOID){
     if(!g_ng){ logf("{\"ev\":\"abort\",\"msg\":\"road graphs (.amg) missing next to the DLL\"}"); return 0; }
     g_page=alloc_near(s.fork); if(!g_page){ logf("{\"ev\":\"abort\",\"msg\":\"could not allocate the hook page\"}"); return 0; }
 #ifdef KC_DEVTOOLS
-    { PageInfo pi{PAGE_MAGIC,s.filter,s.cpget}; memcpy(g_page+PAGE_INFO,&pi,sizeof pi); }
+    { PageInfo pi{PAGE_MAGIC,s.filter,s.cpget,0}; memcpy(g_page+PAGE_INFO,&pi,sizeof pi); }
 #endif
     g_p0=(volatile uintptr_t*)(g_page+0xF00); g_p1=(volatile uintptr_t*)(g_page+0xF08); g_map=(volatile uintptr_t*)(g_page+0xF10);
     uint8_t* stubA=g_page+g_pos;                  // fork chooser: candidate r14 -> r15
@@ -671,6 +803,14 @@ static DWORD WINAPI Init(LPVOID){
     g_brakeEvt=CreateEventA(nullptr,FALSE,FALSE,nullptr); CreateThread(nullptr,0,BrakeThread,nullptr,0,nullptr);
     patch_call(s.fork,stubA); patch_call(s.snap,stubB); patch_call(s.cp,stubM);
     install_map_lookup(R.im);
+    {   // optional: without it, markers are never ignored (only matters in hardcore)
+        kc::Resolver H; H.im=R.im;
+        uintptr_t gm=H.find("game mode check",SIG_GAMEMODE);
+        uintptr_t gl=gm? H.riprel("game mode object",gm+3) : 0;
+        if(H.ok()){ g_gmGlobal=(void**)gl; g_hcJump=gm+0x1C; }
+        else logf("{\"ev\":\"hardcore_check_off\"}");
+    }
+    install_notices(R.im);
     logf("{\"ev\":\"ready\",\"graphs\":%d}",g_ng);
     for(;;){
         Sleep(20);
@@ -678,7 +818,7 @@ static DWORD WINAPI Init(LPVOID){
     }
 }
 
-KC_PLUGIN("Horse Route Follow", KC_AUTHOR, 102)
+KC_PLUGIN("Horse Route Follow", KC_AUTHOR, 110)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){
     if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); }
     return TRUE;

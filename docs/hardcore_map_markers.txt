@@ -1,0 +1,37 @@
+HORSE ROUTE FOLLOW - HARDCORE MAP MARKERS 1.1.0 - Kingdom Come: Deliverance II
+by Flubbermunchkin
+
+Optional add-on. Hardcore mode does not let you place custom map markers, so Horse Route Follow has
+nowhere to ride to. This add-on allows custom markers in hardcore mode again, and that's all it changes:
+
+  - You can place and remove a custom marker on the map as in a normal game.
+  - The marker shows on the map only. The compass still shows nothing, and your own position stays
+    hidden, as hardcore intends.
+
+With Horse Route Follow installed, the horse then routes to the marker exactly like in a normal game.
+It also works on its own if you just want markers in hardcore.
+
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
+
+INSTALL
+  Vortex: install as usual.
+  Manual: copy the "horse_route_follow_hardcore" folder from this archive into <game>\Mods\
+          (you should end up with <game>\Mods\horse_route_follow_hardcore\KCSE\Plugins\kcd2_hardcore_markers.dll).
+  Uninstall: delete that folder. Hardcore is then back to normal (markers already placed stay
+  hidden again).
+
+HOW IT WORKS
+  The game blocks markers in hardcore with two "is this hardcore mode?" checks in the map screen (one
+  for placing a marker, one for drawing it). The add-on removes exactly those two checks while the
+  game runs; no game files are changed. It finds them by pattern; if a game update changes that code,
+  it changes nothing and the log says "disabled: this game version is not supported yet".
+
+LOG
+  kcd2_hardcore_markers.log, next to the DLL.
+
+LICENSE
+  GNU GPL v3 (LICENSE.txt). Source code: https://github.com/EvanJGagnon/KCD2-Mods
