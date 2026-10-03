@@ -14,7 +14,7 @@ MODS = [
          desc='Henry forges the chosen piece himself, stroke by stroke, through the game\'s own forge actions (F9).',
          ini='[Keys]\n' + KEYHELP + 'Forge=F9\n\n[Options]\n' + DEBUG),
     dict(folder='theatrical_autobrew', title='Theatrical Autobrew', zip='TheatricalAutobrew', dll='kcd2_alchemy.dll', data=['alch_recipes.txt'],
-         desc='Henry brews the open recipe step by step, in real time (F8). An adaptation of Autobrew by JerryYOJ.',
+         desc='Henry brews the open recipe step by step, in real time (F8). An adaptation of Autobrew by JerryYOJ.', ver='1.0.1',
          ini='[Keys]\n' + KEYHELP + 'Brew=F8\n\n[Options]\n' + DEBUG),
     dict(folder='horse_route_follow', title='Horse Route Follow', zip='HorseRouteFollow', dll='kcd2_autotravel.dll',
          data=['trosecko.amg', 'kutnohorsko.amg', 'klaster.amg'],

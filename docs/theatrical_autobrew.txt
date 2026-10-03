@@ -1,4 +1,4 @@
-THEATRICAL AUTOBREW 1.0.0 - Kingdom Come: Deliverance II
+THEATRICAL AUTOBREW 1.0.1 - Kingdom Come: Deliverance II
 by Flubbermunchkin - an adaptation of Autobrew by JerryYOJ
 
 Open a recipe in the alchemy book, press F8, and Henry brews it - visibly, step by step, in real
@@ -74,3 +74,12 @@ CREDITS
 LICENSE
   GNU GPL v3 (LICENSE.txt), as required by Autobrew's license. The source code, including the
   ported Autobrew parts, is available as a separate download on the Nexus page.
+
+CHANGES
+  1.0.1  - Improved ingredient quality handling and diagnostics.
+         - Prioritizes the healthiest suitable fresh herb stack.
+         - Uses dried herbs only when a suitable fresh stack isn't available.
+         - Correctly counts ingredients across multiple inventory stacks.
+         - Adds detailed potion-quality diagnostics for troubleshooting (DebugLog=1).
+         - Brewing sequence and timing are unchanged.
+  1.0.0  - First release.
