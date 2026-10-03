@@ -730,7 +730,11 @@ static void install_notices(const kc::Image& im){
     if(g_prev.ssUpdate && vt){ up=g_prev.ssUpdate; R.verify("CScriptSystem::Update",up,SIG_SS_UPDATE); }   // live reload: slot holds the old copy\"s hook
     else
 #endif
-    up=R.slot("CScriptSystem::Update",vt,1,SIG_SS_UPDATE);
+    {   // another mod may have hooked the slot first: chain to it
+        uintptr_t cur= vt? ((uintptr_t*)vt)[1] : 0;
+        if(cur && !R.im.in_image(cur)){ if(R.find("CScriptSystem::Update",SIG_SS_UPDATE)) up=cur; }
+        else up=R.slot("CScriptSystem::Update",vt,1,SIG_SS_UPDATE);
+    }
     uintptr_t ex=R.slot("CScriptSystem::ExecuteBuffer",vt,6,SIG_SS_EXEC);
     if(!R.ok()){ logf("{\"ev\":\"notices_off\",\"msg\":\"on-screen notices not available in this game version\"}"); return; }
     g_ssExec=(SsExec_t)ex; g_ssUpdate=(SsUpdate_t)up;
