@@ -18,7 +18,7 @@ MODS = [
          ini='[Keys]\n' + KEYHELP + 'Brew=F8\n\n[Options]\n' + DEBUG),
     dict(folder='horse_route_follow', title='Horse Route Follow', zip='HorseRouteFollow', dll='kcd2_autotravel.dll',
          data=['trosecko.amg', 'kutnohorsko.amg', 'klaster.amg'],
-         desc='Horse auto-follow takes the road route to your custom map marker, drawn on the map.', ver='1.1.0',
+         desc='Horse auto-follow takes the road route to your custom map marker, drawn on the map.', ver='1.1.1',
          text=[('hrf_wrong_way', 'Wrong way - turn around')],
          ini='[Options]\n'
              '; 1 = briefly hold S to stop the horse on arrival\nBrakeOnArrival=1\n'

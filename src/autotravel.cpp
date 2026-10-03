@@ -64,6 +64,7 @@ static const uint64_t STUCK_MS      = 400;     // standing: every road ahead ref
 static const uint64_t STUCK_MOVE_MS = 150;     // moving:   every road ahead refused this long -> let the game choose
 static const uint64_t STUCK_NONE_MS = 900;     // moving:   no road accepted at all this long -> let the game choose
 static const float    SHOW_SPEED    = 6.5f;    // wrong-way notice only above this speed (m/s): riding, not walking about
+static const uint64_t FOLLOW_MS     = 20000;   // auto-follow asked about roads this recently = riding on auto-follow
 static const float    WRONG_WAY_M   = 60.0f;   // riding on the wrong way this far from the route -> recalculate
 static const float    DEVIATE       = 15.0f;   // rider this far from the route ...
 static const uint64_t DEVIATE_MS    = 1000;    // ... for this long = left the route: recalculate
@@ -561,7 +562,7 @@ static void track_position(uint64_t now){
     }
     // Riding with a destination: auto-follow asked us about roads recently (it does not ask on long
     // stretches without junctions, so allow a generous window) and the rider is moving.
-    if(g_endOk && !g_arrived && now-g_hookT<20000 && g_speed>1.5f){
+    if(g_endOk && !g_arrived && now-g_hookT<FOLLOW_MS && g_speed>1.5f){
         // Arrived: at the point of road closest to the marker.  Fallback: came within reach of the
         // marker and are now moving away again (took another road past it).
         float lead=g_arriveDist + g_speed*BRAKE_LEAD_S;
@@ -703,11 +704,12 @@ static void orient_step(uint64_t now){
             else if(g_posOk && dist_to_route(g_px,g_py)>=WRONG_WAY_M){ g_wrongWay=false; logf("{\"ev\":\"wrong_way_replan\"}"); }
         }
     }
-    // Show the notice only while really riding the wrong way: at riding speed (canter or faster, so
-    // neither standing, walking the horse about nor running on foot), on a road, and moving (not just
-    // facing) away from the route.
-    g_showWrong = g_wrongWay && g_posOk && g_headOk && g_speed>SHOW_SPEED && against_route(g_mhx,g_mhy)
-                  && g_cur->nearest(g_px,g_py,8.f)>=0;
+    // Show the notice only while really riding the wrong way on auto-follow: auto-follow asked about
+    // roads recently (never the case on foot, where sprinting can exceed SHOW_SPEED), at riding speed
+    // (canter or faster, so neither standing nor walking the horse about), on a road, and moving (not
+    // just facing) away from the route.
+    g_showWrong = g_wrongWay && g_posOk && g_headOk && now-g_hookT<FOLLOW_MS && g_speed>SHOW_SPEED
+                  && against_route(g_mhx,g_mhy) && g_cur->nearest(g_px,g_py,8.f)>=0;
 }
 static void* SsUpdateHook(void* self,void* a,void* b,void* c){
     void* r=g_ssUpdate(self,a,b,c);
@@ -728,7 +730,11 @@ static void install_notices(const kc::Image& im){
     if(g_prev.ssUpdate && vt){ up=g_prev.ssUpdate; R.verify("CScriptSystem::Update",up,SIG_SS_UPDATE); }   // live reload: slot holds the old copy\"s hook
     else
 #endif
-    up=R.slot("CScriptSystem::Update",vt,1,SIG_SS_UPDATE);
+    {   // another mod may have hooked the slot first: chain to it
+        uintptr_t cur= vt? ((uintptr_t*)vt)[1] : 0;
+        if(cur && !R.im.in_image(cur)){ if(R.find("CScriptSystem::Update",SIG_SS_UPDATE)) up=cur; }
+        else up=R.slot("CScriptSystem::Update",vt,1,SIG_SS_UPDATE);
+    }
     uintptr_t ex=R.slot("CScriptSystem::ExecuteBuffer",vt,6,SIG_SS_EXEC);
     if(!R.ok()){ logf("{\"ev\":\"notices_off\",\"msg\":\"on-screen notices not available in this game version\"}"); return; }
     g_ssExec=(SsExec_t)ex; g_ssUpdate=(SsUpdate_t)up;
@@ -780,7 +786,7 @@ static DWORD WINAPI Init(LPVOID){
     g_mapLine=kc::ini_int("Options","MapRoute",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("{\"ev\":\"abort\",\"msg\":\"WHGame.dll not loaded\"}"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("{\"ev\":\"start\",\"version\":\"1.1.0\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
+    logf("{\"ev\":\"start\",\"version\":\"1.1.1\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
     Sites s{};
     if(!resolve(R,s)){ logf("{\"ev\":\"disabled\",\"msg\":\"this game version is not supported yet - nothing was changed\"}"); return 0; }
     g_filter=(Filter_t)s.filter; g_cpget=(CpGetter_t)s.cpget;
@@ -818,7 +824,7 @@ static DWORD WINAPI Init(LPVOID){
     }
 }
 
-KC_PLUGIN("Horse Route Follow", KC_AUTHOR, 110)
+KC_PLUGIN("Horse Route Follow", KC_AUTHOR, 111)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){
     if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); }
     return TRUE;
