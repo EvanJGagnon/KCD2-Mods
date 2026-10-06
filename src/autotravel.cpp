@@ -108,6 +108,7 @@ static volatile float g_fx=0,g_fy=0;   static volatile bool g_faceOk=false;     
 static volatile bool g_wrongWay=false, g_showWrong=false; static uint64_t g_wrongT=0;               // orientation stage: facing away
 static volatile uint64_t g_moveT=0;                                                      // when the horse last started moving
 static volatile float g_endX=0,g_endY=0,g_endMk=0; static volatile bool g_endOk=false;  // route end, its distance to the marker
+static volatile uint64_t g_stopT=0;                                                     // last time the rider stood still >1 s (e.g. dismounted)
 static volatile uint64_t g_hookT=0;                                                     // last time auto-follow asked us
 static volatile bool g_arrived=false;
 
@@ -227,6 +228,10 @@ static uint64_t g_lastPlan=0, g_fwdRejectT=0, g_yieldUntil=0;
 static bool read_marker(float& mx,float& my){
     uintptr_t m=g_map?*g_map:0; if(!m) return false;
     uintptr_t b=0,e=0; if(!rd(m+0x588,&b)||!rd(m+0x590,&e)||!b||e<=b) return false;
+    {   // diagnostic: the first entry is used; log when the list holds more than one (wrong-marker reports)
+        static size_t lastN=1; size_t n=(e-b)/8;
+        if(n!=lastN){ lastN=n; if(n>1) logf("{\"ev\":\"marker_list\",\"count\":%zu}",n); }
+    }
     uintptr_t rec=0; if(!rd(b,&rec)||!rec) return false;
     if(!rd(rec+0x50,&mx) || !rd(rec+0x54,&my)) return false;
     return sane(mx,my);
@@ -560,9 +565,14 @@ static void track_position(uint64_t now){
             float l=hypotf(fx,fy); if(l>0.3f && l<1.5f){ g_fx=fx/l; g_fy=fy/l; g_faceOk=true; } else g_faceOk=false;
         } else g_faceOk=false;
     }
+    // Standing still for a second ends the ride (stopped by hand, dismounted): arrival and braking need
+    // auto-follow to have asked about roads again since then, never on foot (holding S walks Henry back).
+    {   static uint64_t stillT=0;
+        if(g_speed<0.5f){ if(!stillT) stillT=now; else if(now-stillT>1000) g_stopT=now; } else stillT=0;
+    }
     // Riding with a destination: auto-follow asked us about roads recently (it does not ask on long
     // stretches without junctions, so allow a generous window) and the rider is moving.
-    if(g_endOk && !g_arrived && now-g_hookT<FOLLOW_MS && g_speed>1.5f){
+    if(g_endOk && !g_arrived && now-g_hookT<FOLLOW_MS && g_hookT>g_stopT && g_speed>1.5f){
         // Arrived: at the point of road closest to the marker.  Fallback: came within reach of the
         // marker and are now moving away again (took another road past it).
         float lead=g_arriveDist + g_speed*BRAKE_LEAD_S;
