@@ -68,6 +68,7 @@ static const uint64_t FOLLOW_MS     = 20000;   // auto-follow asked about roads 
 static const float    WRONG_WAY_M   = 60.0f;   // riding on the wrong way this far from the route -> recalculate
 static const float    DEVIATE       = 15.0f;   // rider this far from the route ...
 static const uint64_t DEVIATE_MS    = 1000;    // ... for this long = left the route: recalculate
+static const float    HORSE_SPEED   = 7.5f;    // faster than Henry can sprint: certainly on horseback (m/s)
 static const float    BRAKE_LEAD_S  = 0.4f;    // brake earlier by this many seconds of travel
 static const DWORD    BRAKE_MS      = 1200;    // hold S this long on arrival
 static float g_arriveDist = 3.0f;              // ini ArriveDistance
@@ -587,14 +588,15 @@ static void track_position(uint64_t now){
             float l=hypotf(fx,fy); if(l>0.3f && l<1.5f){ g_fx=fx/l; g_fy=fy/l; g_faceOk=true; } else g_faceOk=false;
         } else g_faceOk=false;
     }
-    // Standing still for a second ends the ride (stopped by hand, dismounted): arrival and braking need
-    // auto-follow to have asked about roads again since then, never on foot (holding S walks Henry back).
+    // Standing still for a second may end the ride (stopped by hand, dismounted): then the arrival brake
+    // needs auto-follow to have asked about roads again, or horse speed -- never on foot, where holding
+    // S walks Henry back towards the horse.
     {   static uint64_t stillT=0;
         if(g_speed<0.5f){ if(!stillT) stillT=now; else if(now-stillT>1000) g_stopT=now; } else stillT=0;
     }
     // Riding with a destination: auto-follow asked us about roads recently (it does not ask on long
     // stretches without junctions, so allow a generous window) and the rider is moving.
-    if(g_endOk && !g_arrived && now-g_hookT<FOLLOW_MS && g_hookT>g_stopT && g_speed>1.5f){
+    if(g_endOk && !g_arrived && now-g_hookT<FOLLOW_MS && g_speed>1.5f){
         // Arrived: at the point of road closest to the marker.  Fallback: came within reach of the
         // marker and are now moving away again (took another road past it).
         float lead=g_arriveDist + g_speed*BRAKE_LEAD_S;
@@ -604,7 +606,9 @@ static void track_position(uint64_t now){
         if(d <= lead || passed){
             g_arrived=true;
             logf("{\"ev\":\"arrived\",\"marker_dist\":%.1f,\"end_dist\":%.1f,\"speed\":%.1f,\"why\":\"%s\"}",dm,d,(float)g_speed, d<=lead?"road_point":"passed");
-            if(g_brakeOn) SetEvent(g_brakeEvt);
+            bool riding = g_hookT>g_stopT || g_speed>HORSE_SPEED;
+            if(g_brakeOn && riding) SetEvent(g_brakeEvt);
+            else if(g_brakeOn) logf("{\"ev\":\"brake_skipped\",\"why\":\"not riding\"}");
         }
     }
 }
@@ -818,7 +822,7 @@ static DWORD WINAPI Init(LPVOID){
     g_mapLine=kc::ini_int("Options","MapRoute",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("{\"ev\":\"abort\",\"msg\":\"WHGame.dll not loaded\"}"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("{\"ev\":\"start\",\"version\":\"1.1.0\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
+    logf("{\"ev\":\"start\",\"version\":\"1.1.2\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
     Sites s{};
     if(!resolve(R,s)){ logf("{\"ev\":\"disabled\",\"msg\":\"this game version is not supported yet - nothing was changed\"}"); return 0; }
     g_filter=(Filter_t)s.filter; g_cpget=(CpGetter_t)s.cpget;
@@ -856,7 +860,7 @@ static DWORD WINAPI Init(LPVOID){
     }
 }
 
-KC_PLUGIN("Horse Route Follow", KC_AUTHOR, 110)
+KC_PLUGIN("Horse Route Follow", KC_AUTHOR, 112)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){
     if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); }
     return TRUE;

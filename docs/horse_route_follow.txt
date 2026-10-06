@@ -1,4 +1,4 @@
-HORSE ROUTE FOLLOW 1.1.0 - Kingdom Come: Deliverance II
+HORSE ROUTE FOLLOW 1.1.2 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 The game's horse auto-follow picks a branch at random at every fork. With this mod it follows
@@ -98,6 +98,15 @@ LICENSE
   GNU GPL v3 (LICENSE.txt). Source code: https://github.com/EvanJGagnon/KCD2-Mods
 
 CHANGES
+  1.1.2  - Fixed being routed to the wrong place when the map holds an extra, invisible marker:
+           the route now follows the marker you placed or moved last (moving your marker used to
+           change nothing, and the mod went idle after reaching the wrong spot).
+         - Fixed Henry being pulled back towards the horse after dismounting near the destination:
+           the arrival brake (holding S) now only happens on horseback.
+  1.1.1  - The "Wrong way - turn around" notice no longer appears on foot (it now also requires
+           that the horse is on auto-follow).
+         - The notice works again when another mod hooks the same game function first (it was
+           switched off with "notices_off" in the log).
   1.1.0  - Orientation check: starting off facing away from the route shows "Wrong way - turn
            around" (only while actually riding the road the wrong way) and keeps the route,
            instead of quietly planning a detour ahead.
