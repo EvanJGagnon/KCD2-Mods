@@ -74,6 +74,11 @@ python tools\package.py
 - `out\dev\` - development builds (`/DKC_DEVTOOLS`: self-test exports, horse-mod live reload) plus `selftest.exe` and `routetest.exe`
 - `dist\` - the mod archives
 
+`build.bat` expects Visual Studio 2022 Community; for another edition or the Build Tools, set `KC_VCVARS`
+to its `vcvars64.bat` first. Every push is also built on GitHub Actions
+([`.github/workflows/build.yml`](.github/workflows/build.yml)): a Windows runner runs `build.bat` and
+`tools\package.py` and attaches the mod archives and the `out\dev` builds to the run.
+
 Self-test against a game DLL:
 
 ```bat

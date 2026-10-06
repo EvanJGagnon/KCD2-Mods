@@ -68,6 +68,7 @@ static const uint64_t FOLLOW_MS     = 20000;   // auto-follow asked about roads 
 static const float    WRONG_WAY_M   = 60.0f;   // riding on the wrong way this far from the route -> recalculate
 static const float    DEVIATE       = 15.0f;   // rider this far from the route ...
 static const uint64_t DEVIATE_MS    = 1000;    // ... for this long = left the route: recalculate
+static const float    HORSE_SPEED   = 7.5f;    // faster than Henry can sprint: certainly on horseback (m/s)
 static const float    BRAKE_LEAD_S  = 0.4f;    // brake earlier by this many seconds of travel
 static const DWORD    BRAKE_MS      = 1200;    // hold S this long on arrival
 static float g_arriveDist = 3.0f;              // ini ArriveDistance
@@ -108,6 +109,7 @@ static volatile float g_fx=0,g_fy=0;   static volatile bool g_faceOk=false;     
 static volatile bool g_wrongWay=false, g_showWrong=false; static uint64_t g_wrongT=0;               // orientation stage: facing away
 static volatile uint64_t g_moveT=0;                                                      // when the horse last started moving
 static volatile float g_endX=0,g_endY=0,g_endMk=0; static volatile bool g_endOk=false;  // route end, its distance to the marker
+static volatile uint64_t g_stopT=0;                                                     // last time the rider stood still >1 s (e.g. dismounted)
 static volatile uint64_t g_hookT=0;                                                     // last time auto-follow asked us
 static volatile bool g_arrived=false;
 
@@ -224,12 +226,38 @@ static int   g_prog=0;                          // route index nearest the rider
 static float g_mx=0,g_my=0; static bool g_haveMarker=false;
 static uint64_t g_lastPlan=0, g_fwdRejectT=0, g_yieldUntil=0;
 
+// The map's custom-marker list (+0x588..+0x590: pointers to records, position at +0x50/+0x54) normally
+// holds one entry, but some saves hold more (e.g. a leftover marker the map no longer shows; a player
+// was routed there and it never moved).  Use the entry placed or moved last: any entry that is new or
+// moved since the previous read; before anything moved, the last entry (the newest).
+static SRWLOCK g_mkLock=SRWLOCK_INIT;            // read from the game thread and the map's draw call
 static bool read_marker(float& mx,float& my){
     uintptr_t m=g_map?*g_map:0; if(!m) return false;
     uintptr_t b=0,e=0; if(!rd(m+0x588,&b)||!rd(m+0x590,&e)||!b||e<=b) return false;
-    uintptr_t rec=0; if(!rd(b,&rec)||!rec) return false;
-    if(!rd(rec+0x50,&mx) || !rd(rec+0x54,&my)) return false;
-    return sane(mx,my);
+    struct Mk { uintptr_t rec; float x,y; };
+    static Mk seen[32]; static size_t ns=0; static uintptr_t pick=0;
+    Mk cur[32]; size_t nc=0; uintptr_t changed=0;
+    size_t n=(e-b)/8; if(n>32) n=32;
+    AcquireSRWLockExclusive(&g_mkLock);
+    for(size_t i=0;i<n;i++){
+        uintptr_t rec=0; float x=0,y=0;
+        if(!rd(b+8*i,&rec)||!rec||!rd(rec+0x50,&x)||!rd(rec+0x54,&y)||!sane(x,y)) continue;
+        bool same=false;
+        for(size_t k=0;k<ns;k++) if(seen[k].rec==rec && fabsf(seen[k].x-x)<0.5f && fabsf(seen[k].y-y)<0.5f){ same=true; break; }
+        if(!same) changed=rec;
+        cur[nc++]={rec,x,y};
+    }
+    bool ok=nc>0;
+    if(ok){
+        if(changed) pick=changed;
+        size_t i=nc; for(size_t k=0;k<nc;k++) if(cur[k].rec==pick) i=k;
+        if(i==nc){ i=nc-1; pick=cur[i].rec; }
+        if(nc>1 && (changed || nc!=ns)) logf("{\"ev\":\"marker_list\",\"count\":%zu,\"using\":%zu,\"at\":[%.1f,%.1f]}",nc,i,cur[i].x,cur[i].y);
+        mx=cur[i].x; my=cur[i].y;
+    }
+    memcpy(seen,cur,nc*sizeof(Mk)); ns=nc;
+    ReleaseSRWLockExclusive(&g_mkLock);
+    return ok;
 }
 static void clear_route(){ g_route.clear(); }   // the destination (g_end*) stays: it does not depend on the route
 static volatile float g_dmMin=1e9f;               // closest the rider has been to the marker
@@ -560,6 +588,12 @@ static void track_position(uint64_t now){
             float l=hypotf(fx,fy); if(l>0.3f && l<1.5f){ g_fx=fx/l; g_fy=fy/l; g_faceOk=true; } else g_faceOk=false;
         } else g_faceOk=false;
     }
+    // Standing still for a second may end the ride (stopped by hand, dismounted): then the arrival brake
+    // needs auto-follow to have asked about roads again, or horse speed -- never on foot, where holding
+    // S walks Henry back towards the horse.
+    {   static uint64_t stillT=0;
+        if(g_speed<0.5f){ if(!stillT) stillT=now; else if(now-stillT>1000) g_stopT=now; } else stillT=0;
+    }
     // Riding with a destination: auto-follow asked us about roads recently (it does not ask on long
     // stretches without junctions, so allow a generous window) and the rider is moving.
     if(g_endOk && !g_arrived && now-g_hookT<FOLLOW_MS && g_speed>1.5f){
@@ -572,7 +606,9 @@ static void track_position(uint64_t now){
         if(d <= lead || passed){
             g_arrived=true;
             logf("{\"ev\":\"arrived\",\"marker_dist\":%.1f,\"end_dist\":%.1f,\"speed\":%.1f,\"why\":\"%s\"}",dm,d,(float)g_speed, d<=lead?"road_point":"passed");
-            if(g_brakeOn) SetEvent(g_brakeEvt);
+            bool riding = g_hookT>g_stopT || g_speed>HORSE_SPEED;
+            if(g_brakeOn && riding) SetEvent(g_brakeEvt);
+            else if(g_brakeOn) logf("{\"ev\":\"brake_skipped\",\"why\":\"not riding\"}");
         }
     }
 }
@@ -786,7 +822,7 @@ static DWORD WINAPI Init(LPVOID){
     g_mapLine=kc::ini_int("Options","MapRoute",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("{\"ev\":\"abort\",\"msg\":\"WHGame.dll not loaded\"}"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("{\"ev\":\"start\",\"version\":\"1.1.1\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
+    logf("{\"ev\":\"start\",\"version\":\"1.1.2\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
     Sites s{};
     if(!resolve(R,s)){ logf("{\"ev\":\"disabled\",\"msg\":\"this game version is not supported yet - nothing was changed\"}"); return 0; }
     g_filter=(Filter_t)s.filter; g_cpget=(CpGetter_t)s.cpget;
@@ -824,7 +860,7 @@ static DWORD WINAPI Init(LPVOID){
     }
 }
 
-KC_PLUGIN("Horse Route Follow", KC_AUTHOR, 111)
+KC_PLUGIN("Horse Route Follow", KC_AUTHOR, 112)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){
     if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); }
     return TRUE;

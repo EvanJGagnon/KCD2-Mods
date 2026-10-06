@@ -1,9 +1,11 @@
 @echo off
 rem Builds the three mods (release: out\) plus development builds and test tools (out\dev\).
 rem Requires Visual Studio 2022 (x64 C++ tools).  Set KC_AUTHOR first, e.g.  set KC_AUTHOR=YourName
+rem Another Visual Studio edition or the Build Tools: set KC_VCVARS to its vcvars64.bat (the CI build does).
 setlocal
 cd /d "%~dp0"
-call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
+if "%KC_VCVARS%"=="" set "KC_VCVARS=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+call "%KC_VCVARS%" >nul || exit /b 1
 if "%KC_AUTHOR%"=="" set KC_AUTHOR=unknown
 if not exist out\obj mkdir out\obj
 if not exist out\dev mkdir out\dev

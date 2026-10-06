@@ -1,0 +1,48 @@
+# Builds the mods on a Windows runner with the repo's own build.bat and tools/package.py, and attaches
+# the mod archives (dist\) and the development builds with the test tools (out\dev\) to the run.
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Find the MSVC x64 tools
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "no Visual Studio with the x64 C++ tools on this runner" }
+          "KC_VCVARS=$vs\VC\Auxiliary\Build\vcvars64.bat" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build (build.bat)
+        shell: cmd
+        env:
+          KC_AUTHOR: Flubbermunchkin
+        run: call build.bat
+
+      - name: Package (tools/package.py)
+        run: python tools\package.py
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: mod-archives
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: dev-builds
+          path: out/dev/
+          if-no-files-found: error
