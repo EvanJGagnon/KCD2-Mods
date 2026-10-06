@@ -225,16 +225,38 @@ static int   g_prog=0;                          // route index nearest the rider
 static float g_mx=0,g_my=0; static bool g_haveMarker=false;
 static uint64_t g_lastPlan=0, g_fwdRejectT=0, g_yieldUntil=0;
 
+// The map's custom-marker list (+0x588..+0x590: pointers to records, position at +0x50/+0x54) normally
+// holds one entry, but some saves hold more (e.g. a leftover marker the map no longer shows; a player
+// was routed there and it never moved).  Use the entry placed or moved last: any entry that is new or
+// moved since the previous read; before anything moved, the last entry (the newest).
+static SRWLOCK g_mkLock=SRWLOCK_INIT;            // read from the game thread and the map's draw call
 static bool read_marker(float& mx,float& my){
     uintptr_t m=g_map?*g_map:0; if(!m) return false;
     uintptr_t b=0,e=0; if(!rd(m+0x588,&b)||!rd(m+0x590,&e)||!b||e<=b) return false;
-    {   // diagnostic: the first entry is used; log when the list holds more than one (wrong-marker reports)
-        static size_t lastN=1; size_t n=(e-b)/8;
-        if(n!=lastN){ lastN=n; if(n>1) logf("{\"ev\":\"marker_list\",\"count\":%zu}",n); }
+    struct Mk { uintptr_t rec; float x,y; };
+    static Mk seen[32]; static size_t ns=0; static uintptr_t pick=0;
+    Mk cur[32]; size_t nc=0; uintptr_t changed=0;
+    size_t n=(e-b)/8; if(n>32) n=32;
+    AcquireSRWLockExclusive(&g_mkLock);
+    for(size_t i=0;i<n;i++){
+        uintptr_t rec=0; float x=0,y=0;
+        if(!rd(b+8*i,&rec)||!rec||!rd(rec+0x50,&x)||!rd(rec+0x54,&y)||!sane(x,y)) continue;
+        bool same=false;
+        for(size_t k=0;k<ns;k++) if(seen[k].rec==rec && fabsf(seen[k].x-x)<0.5f && fabsf(seen[k].y-y)<0.5f){ same=true; break; }
+        if(!same) changed=rec;
+        cur[nc++]={rec,x,y};
     }
-    uintptr_t rec=0; if(!rd(b,&rec)||!rec) return false;
-    if(!rd(rec+0x50,&mx) || !rd(rec+0x54,&my)) return false;
-    return sane(mx,my);
+    bool ok=nc>0;
+    if(ok){
+        if(changed) pick=changed;
+        size_t i=nc; for(size_t k=0;k<nc;k++) if(cur[k].rec==pick) i=k;
+        if(i==nc){ i=nc-1; pick=cur[i].rec; }
+        if(nc>1 && (changed || nc!=ns)) logf("{\"ev\":\"marker_list\",\"count\":%zu,\"using\":%zu,\"at\":[%.1f,%.1f]}",nc,i,cur[i].x,cur[i].y);
+        mx=cur[i].x; my=cur[i].y;
+    }
+    memcpy(seen,cur,nc*sizeof(Mk)); ns=nc;
+    ReleaseSRWLockExclusive(&g_mkLock);
+    return ok;
 }
 static void clear_route(){ g_route.clear(); }   // the destination (g_end*) stays: it does not depend on the route
 static volatile float g_dmMin=1e9f;               // closest the rider has been to the marker
