@@ -70,7 +70,7 @@ enum { MODE_BREWING=2, MODE_READING=4, STATE_IDLE=21, STATE_HOLDPOT=5, SLOT_VERB
 // C_Alchemy field offsets
 static const uintptr_t O_ACTOR=0x18, O_CONTEXT=0x30, O_DIRECTOR=0x78, O_HERBKEY=0x120, O_KINDENT=0x150,
     O_SPECKEY=0x2D0, O_MODE=0x300, O_FIRE=0x320, O_SAND=0x338, O_POTONFIRE=0x428, O_POTMOVING=0x429, O_BOILSTATE=0x440,
-    O_BUCKETS=0x470, O_PENDING=0x688;
+    O_BUCKETS=0x470, O_PENDING=0x688, O_QCOEF=0x6D0;
 
 static const char* volatile g_step="";
 using kc::logf;
@@ -116,10 +116,67 @@ static GUID16 dried_variant(const GUID16& g){
     return F<GUID16>(herb,0x100);                                  // DriedItemId
 }
 static int item_amount(void* item){ return item? F<int32_t>(item,0x50):0; }
-static int available(void* inv,const GUID16& g){
-    int n=item_amount(pFindItemByClass(inv,&g));
-    GUID16 d=dried_variant(g); if(!(d==NULLGUID)) n+=item_amount(pFindItemByClass(inv,&d));
-    return n;
+
+// ---- herb stacks: the game's FindItemByClass returns the FIRST stack of a class, whatever its health ----
+// C_InventoryBase::m_items (+0x08) is a std::vector<C_Item*>; C_Item: class data +0x48, amount +0x50,
+// health +0x54, WUID +0x30.  Stacks of one class share the class-data pointer, so FindItemByClass
+// gives the class to match without knowing where the class GUID lives.  Anything that does not look
+// right (vector layout, the anchor stack missing from the list) -> enumeration reports failure and
+// the caller keeps the old first-stack behaviour.
+static const uintptr_t O_ITEMS=0x08, I_WUID=0x30, I_CLASS=0x48, I_AMOUNT=0x50, I_HEALTH=0x54, ITEM_SIZE=0xA8;
+struct Stack { void* it; int amount; float health; uint64_t wuid; };
+static const char* gstr(const GUID16& g){ static char b[4][40]; static int i=0; char* s=b[i++&3]; sprintf_s(s,40,"%08x-%04x",(unsigned)(g.hi>>32),(unsigned)((g.hi>>16)&0xFFFF)); return s; }
+static bool stacks_of(void* inv,const GUID16& g,std::vector<Stack>& out){
+    out.clear();
+    void* first=pFindItemByClass(inv,&g); if(!first) return true;          // none in the inventory
+    uintptr_t v=(uintptr_t)inv+O_ITEMS;
+    if(!kc::readable(v,24)) return false;
+    uintptr_t b=((uintptr_t*)v)[0], e=((uintptr_t*)v)[1], c=((uintptr_t*)v)[2];
+    if(!b || b>e || e>c || (e-b)%8 || (e-b)/8>100000 || !kc::readable(b,e-b)) return false;
+    if(!kc::readable((uintptr_t)first,ITEM_SIZE)) return false;
+    void* cls=F<void*>(first,I_CLASS); if(!cls) return false;
+    bool sawFirst=false;
+    for(uintptr_t p=b;p<e;p+=8){
+        void* it=*(void**)p; if(!it || !kc::readable((uintptr_t)it,ITEM_SIZE)) continue;
+        if(it==first) sawFirst=true;
+        if(F<void*>(it,I_CLASS)!=cls) continue;
+        int amt=F<int32_t>(it,I_AMOUNT); float h=F<float>(it,I_HEALTH);
+        if(amt<=0 || amt>100000 || !(h>=-0.01f && h<=1.5f)) return false;   // not an item stack as we know it
+        out.push_back({it,amt,h,F<uint64_t>(it,I_WUID)});
+    }
+    return sawFirst && !out.empty();
+}
+static int available(void* inv,const GUID16& g){          // all matching stacks, fresh and dried
+    GUID16 d=dried_variant(g); bool hd=!(d==NULLGUID);
+    std::vector<Stack> a,b; bool ok=stacks_of(inv,g,a) && (!hd || stacks_of(inv,d,b));
+    if(!ok){ int n=item_amount(pFindItemByClass(inv,&g)); if(hd) n+=item_amount(pFindItemByClass(inv,&d)); return n; }
+    int n=0; for(auto& s:a) n+=s.amount; for(auto& s:b) n+=s.amount; return n;
+}
+// Which stack the station is stocked with: the healthiest FRESH stack that holds the whole quantity;
+// otherwise the healthiest DRIED stack that does.  false = neither can supply it: refuse the brew (logged).
+static bool choose_stock(void* inv,const GUID16& g,int qty,uint64_t& wuid){
+    GUID16 d=dried_variant(g); bool hd=!(d==NULLGUID);
+    std::vector<Stack> fresh,dried; bool ok=stacks_of(inv,g,fresh) && (!hd || stacks_of(inv,d,dried));
+    if(!ok){                                              // enumeration not trustworthy: old behaviour
+        static bool said=false; if(!said){ said=true; logf("herb stacks cannot be listed on this build - using the game's first stack"); }
+        void* it=pFindItemByClass(inv,&g); if(!it && hd) it=pFindItemByClass(inv,&d);
+        if(!it) return false; wuid=F<uint64_t>(it,I_WUID); return true;
+    }
+    int freshTotal=0, driedTotal=0; for(auto& s:fresh) freshTotal+=s.amount; for(auto& s:dried) driedTotal+=s.amount;
+    if(kc::g_debug){
+        for(size_t i=0;i<fresh.size();i++) logf("herb %s need %d: fresh stack %zu amount %d health %.3f",gstr(g),qty,i,fresh[i].amount,fresh[i].health);
+        for(size_t i=0;i<dried.size();i++) logf("herb %s need %d: dried stack %zu amount %d health %.3f",gstr(g),qty,i,dried[i].amount,dried[i].health);
+    }
+    auto best=[&](std::vector<Stack>& v)->Stack*{ Stack* b=nullptr; for(auto& s:v) if(s.amount>=qty && (!b || s.health>b->health)) b=&s; return b; };
+    if(Stack* s=best(fresh)){ wuid=s->wuid; KC_DLOG("herb %s: selected FRESH stack amount %d health %.3f",gstr(g),s->amount,s->health); return true; }
+    if(Stack* s=best(dried)){
+        wuid=s->wuid;
+        KC_DLOG("herb %s: no single fresh stack holds %d (%zu fresh stack(s), %d in total) - selected DRIED stack amount %d health %.3f",gstr(g),qty,fresh.size(),freshTotal,s->amount,s->health);
+        return true;
+    }
+    logf("herb %s: no single stack holds the %d needed (the table takes herbs from one stack) - brew refused",gstr(g),qty);
+    KC_DLOG("herb %s: fresh %zu stack(s) %d in total, dried %zu stack(s) %d in total",gstr(g),fresh.size(),freshTotal,dried.size(),driedTotal);
+    return false;
 }
 static uint32_t open_recipe_id(void* alc){
     g_step="book entity"; int32_t ent=F<int32_t>(alc,O_KINDENT+4*OpenBook); if(!ent) return 0;
@@ -142,7 +199,7 @@ static void* pot_base_record(void* alc){
 }
 static void log_pot(void* alc,const char* tag){
     auto* v=(std::vector<void*>*)((char*)alc+O_BUCKETS+6*sizeof(std::vector<void*>));
-    char buf[768]; int n=sprintf_s(buf,"%s: pot records %zu:",tag,v->size());
+    char buf[768]; int n=sprintf_s(buf,"%s: m_qualityCoefBase %.3f, pot records %zu:",tag,F<float>(alc,O_QCOEF),v->size());
     for(void* r:*v){ if(!r) continue;
         n+=sprintf_s(buf+n,sizeof buf-n," [%s weak %.1fs strong %.1fs q %.2f flags %u]",
             F<uint8_t>(r,0x20)?"BASE":"herb",F<float>(r,0x14),F<float>(r,0x18),F<float>(r,0x24),F<uint32_t>(r,0x10));
@@ -272,10 +329,9 @@ static void tick(void* alc){
         if(!r||!inv){ to_idle("lost recipe/inventory"); break; }
         std::vector<uint64_t> stock;
         for(auto& i:r->ing){
-            void* it=pFindItemByClass(inv,&i.first);
-            if(!it){ GUID16 d=dried_variant(i.first); if(!(d==NULLGUID)) it=pFindItemByClass(inv,&d); }
-            if(!it){ to_idle("ingredient vanished"); return; }
-            stock.push_back(F<uint64_t>(it,0x30));
+            uint64_t w=0;
+            if(!choose_stock(inv,i.first,i.second,w)){ to_idle("ingredients cannot be stocked (see the lines above)"); return; }
+            stock.push_back(w);
         }
         pClearSlots(alc);
         for(uint64_t w:stock) pApplyIngredient(alc,w);
@@ -391,7 +447,7 @@ static DWORD WINAPI Init(LPVOID){
     g_key.vk=kc::ini_key("Brew",VK_F8);
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v1.0.0 (game ts 0x%08X)",R.im.timestamp);
+    logf("start v1.0.1 (game ts 0x%08X)",R.im.timestamp);
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pPerformVerb=(PerformVerb_t)f.perform; pCanPerformVerb=(CanPerformVerb_t)f.can;
@@ -407,5 +463,5 @@ static DWORD WINAPI Init(LPVOID){
     char kn[16]; logf("ready (%s on a recipe page)",kc::key_name(g_key.vk,kn,sizeof kn));
     return 0;
 }
-KC_PLUGIN("Theatrical Autobrew", KC_AUTHOR, 100)
+KC_PLUGIN("Theatrical Autobrew", KC_AUTHOR, 101)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){ if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); } return TRUE; }
