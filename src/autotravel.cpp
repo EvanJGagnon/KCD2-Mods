@@ -11,7 +11,9 @@
 //     only roads the game can auto-follow).  Planning is direction-aware ("GPS style"): a route
 //     always starts the way the horse is travelling.
 //   * The marker is read through the map screen (the checkpoint getter call is redirected to
-//     CpHook), which also draws the route with the game's own fast-travel path line.
+//     CpHook), which also draws the route with the game's own fast-travel path line.  The game
+//     takes that line for a hovered fast-travel point and hides it afterwards (that call goes
+//     through HideHook), and the route is drawn again.
 //   * Arrival is measured from the rider's real position; the horse is stopped by holding S briefly.
 // The mod never leaves a moving horse without a road: if the game keeps offering only roads that
 // the route refuses, the game's own choice wins for a moment and the route is replanned.
@@ -71,6 +73,7 @@ static const uint64_t DEVIATE_MS    = 1000;    // ... for this long = left the r
 static const float    HORSE_SPEED   = 7.5f;    // faster than Henry can sprint: certainly on horseback (m/s)
 static const float    BRAKE_LEAD_S  = 0.4f;    // brake earlier by this many seconds of travel
 static const DWORD    BRAKE_MS      = 1200;    // hold S this long on arrival
+static const uint64_t MARKER_GONE_MS= 1500;    // marker missing this long = removed (a shorter gap changes nothing)
 static float g_arriveDist = 3.0f;              // ini ArriveDistance
 static float g_uturnCost  = 400.0f;            // ini UTurnPenalty
 static bool  g_brakeOn = true, g_mapLine = true;
@@ -227,35 +230,45 @@ static float g_mx=0,g_my=0; static bool g_haveMarker=false;
 static uint64_t g_lastPlan=0, g_fwdRejectT=0, g_yieldUntil=0;
 
 // The map's custom-marker list (+0x588..+0x590: pointers to records, position at +0x50/+0x54) normally
-// holds one entry, but some saves hold more (e.g. a leftover marker the map no longer shows; a player
-// was routed there and it never moved).  Use the entry placed or moved last: any entry that is new or
-// moved since the previous read; before anything moved, the last entry (the newest).
+// holds one entry, but it can also hold entries the map does not show (e.g. a leftover marker; a player
+// was routed there and it never moved).  The map's own marker refresh says which entry it shows (CpHook
+// passes the getter's result: none when the map hides the flag), and that entry is used.  Between
+// refreshes, the entry placed or moved last: any entry that is new or moved since the previous read (at
+// the first read that is the last one, the newest).  Once the entry in use is gone, no other entry takes
+// its place until one is placed or moved, so a marker the map does not show is never picked up.  An
+// empty or unreadable list leaves all this as it is (it can be a brief gap).
+struct Mk { uintptr_t rec; float x,y; };
 static SRWLOCK g_mkLock=SRWLOCK_INIT;            // read from the game thread and the map's draw call
-static bool read_marker(float& mx,float& my){
-    uintptr_t m=g_map?*g_map:0; if(!m) return false;
-    uintptr_t b=0,e=0; if(!rd(m+0x588,&b)||!rd(m+0x590,&e)||!b||e<=b) return false;
-    struct Mk { uintptr_t rec; float x,y; };
-    static Mk seen[32]; static size_t ns=0; static uintptr_t pick=0;
-    Mk cur[32]; size_t nc=0; uintptr_t changed=0;
-    size_t n=(e-b)/8; if(n>32) n=32;
+static struct { Mk seen[32]; size_t ns; uintptr_t pick; } g_mkl{};   // the list at the previous read, the entry in use
+static bool read_marker(float& mx,float& my,const Mk* shown=nullptr){
+    Mk cur[32]; size_t nc=0;
+    uintptr_t m=g_map?*g_map:0, b=0, e=0;
+    if(m && rd(m+0x588,&b) && rd(m+0x590,&e) && b && e>b){
+        size_t n=(e-b)/8; if(n>32) n=32;
+        for(size_t i=0;i<n;i++){
+            uintptr_t rec=0; float x=0,y=0;
+            if(rd(b+8*i,&rec) && rec && rd(rec+0x50,&x) && rd(rec+0x54,&y) && sane(x,y)) cur[nc++]={rec,x,y};
+        }
+    }
     AcquireSRWLockExclusive(&g_mkLock);
-    for(size_t i=0;i<n;i++){
-        uintptr_t rec=0; float x=0,y=0;
-        if(!rd(b+8*i,&rec)||!rec||!rd(rec+0x50,&x)||!rd(rec+0x54,&y)||!sane(x,y)) continue;
+    uintptr_t changed=0;
+    for(size_t i=0;i<nc;i++){
         bool same=false;
-        for(size_t k=0;k<ns;k++) if(seen[k].rec==rec && fabsf(seen[k].x-x)<0.5f && fabsf(seen[k].y-y)<0.5f){ same=true; break; }
-        if(!same) changed=rec;
-        cur[nc++]={rec,x,y};
+        for(size_t k=0;k<g_mkl.ns;k++) if(g_mkl.seen[k].rec==cur[i].rec && fabsf(g_mkl.seen[k].x-cur[i].x)<0.5f && fabsf(g_mkl.seen[k].y-cur[i].y)<0.5f){ same=true; break; }
+        if(!same) changed=cur[i].rec;
     }
-    bool ok=nc>0;
-    if(ok){
-        if(changed) pick=changed;
-        size_t i=nc; for(size_t k=0;k<nc;k++) if(cur[k].rec==pick) i=k;
-        if(i==nc){ i=nc-1; pick=cur[i].rec; }
-        if(nc>1 && (changed || nc!=ns)) logf("{\"ev\":\"marker_list\",\"count\":%zu,\"using\":%zu,\"at\":[%.1f,%.1f]}",nc,i,cur[i].x,cur[i].y);
-        mx=cur[i].x; my=cur[i].y;
+    if(shown) g_mkl.pick=shown->rec;              // the map's word wins
+    else if(changed) g_mkl.pick=changed;
+    size_t i=nc; for(size_t k=0;k<nc;k++) if(cur[k].rec==g_mkl.pick) i=k;
+    if(i==nc && shown && shown->rec)              // not listed under that pointer: the entry at its position
+        for(size_t k=0;k<nc;k++) if(fabsf(cur[k].x-shown->x)<0.5f && fabsf(cur[k].y-shown->y)<0.5f){ i=k; g_mkl.pick=cur[k].rec; }
+    bool ok = i<nc || (shown && shown->rec);
+    if(i<nc){ mx=cur[i].x; my=cur[i].y; } else if(ok){ mx=shown->x; my=shown->y; }
+    if(nc>1 && (changed || nc!=g_mkl.ns)){
+        if(i<nc) logf("{\"ev\":\"marker_list\",\"count\":%zu,\"using\":%zu,\"at\":[%.1f,%.1f]}",nc,i,cur[i].x,cur[i].y);
+        else logf("{\"ev\":\"marker_list\",\"count\":%zu,\"using\":null}",nc);
     }
-    memcpy(seen,cur,nc*sizeof(Mk)); ns=nc;
+    if(nc){ memcpy(g_mkl.seen,cur,nc*sizeof(Mk)); g_mkl.ns=nc; }
     ReleaseSRWLockExclusive(&g_mkLock);
     return ok;
 }
@@ -295,16 +308,38 @@ static bool markers_hidden(){                     // game thread
     return m==2;
 }
 
+// A marker that goes missing (the map hides it, or it is gone from the list) keeps its destination for
+// MARKER_GONE_MS, so a brief gap changes nothing; still missing after that, it has been removed.
+static volatile uint64_t g_goneT=0;               // when the marker went missing (0: it is there)
+static bool marker_gone(uint64_t now){ uint64_t t=g_goneT; return t && now-t>=MARKER_GONE_MS; }   // any thread
+static void clear_destination(){                  // the marker is gone: its route, arrival and map line with it
+    g_haveMarker=false; g_goneT=0;
+    clear_route(); g_prog=0; g_endOk=false; g_endA=g_endB=-1;
+    g_arrived=false; g_dmMin=1e9f; g_wrongWay=false; g_showWrong=false;
+    logf("{\"ev\":\"marker_removed\"}");
+}
 // Applies the current marker state; true if there is a destination to route to.
-static bool sync_destination(bool mk,float mx,float my){
+static bool sync_destination(bool mk,float mx,float my,uint64_t now){
     if(mk && markers_hidden()){                   // hardcore without the add-on: a stored marker is invisible
         static bool said=false; if(!said){ said=true; logf("{\"ev\":\"hardcore_marker_ignored\"}"); }
         mk=false;
     }
-    if(mk){ if(!g_haveMarker || hypotf(mx-g_mx,my-g_my)>5) set_marker(mx,my); return true; }
-    if(g_haveMarker && g_map && *g_map){ g_haveMarker=false; clear_route(); g_endOk=false; logf("{\"ev\":\"marker_removed\"}"); }
+    if(mk){
+        if(g_goneT){ g_goneT=0; KC_DLOG("{\"ev\":\"marker_back\"}"); }
+        if(!g_haveMarker || hypotf(mx-g_mx,my-g_my)>5) set_marker(mx,my);
+        return true;
+    }
+    if(!g_haveMarker || !g_map || !*g_map) return false;
+    if(!g_goneT){ g_goneT=now; KC_DLOG("{\"ev\":\"marker_missing\"}"); }
+    if(!marker_gone(now)) return true;            // a brief gap: keep everything
+    clear_destination();
     return false;
 }
+static bool marker_destination(uint64_t now){     // game thread: the marker as the list holds it
+    float mx=0,my=0; bool mk=read_marker(mx,my);
+    return sync_destination(mk,mx,my,now);
+}
+static void marker_step(uint64_t now){ if(g_goneT) marker_destination(now); }   // game thread: settle a missing marker even if nothing asks
 static bool g_planFree=false;                     // plan_from: may the route start behind the horse?
 static bool route_to(int n0,int t,std::vector<int>& p){
     if(g_planFree) return g_cur->route(n0,t,p,g_hx,g_hy,g_uturnCost,0.f);
@@ -429,8 +464,7 @@ static bool FilterHook(float* dir, float* cur){
         if(hit && (!g_cur || otherHits>=3)){ set_level(hit); otherHits=0; }
         if(!g_cur) return vanilla;
     } else otherHits=0;
-    float mx=0,my=0; bool mk=read_marker(mx,my);
-    if(!sync_destination(mk,mx,my)) return vanilla;   // no destination: vanilla auto-follow
+    if(!marker_destination(now)) return vanilla;  // no destination: vanilla auto-follow
     if(g_arrived) return vanilla;                 // done until the marker moves
     int n0=g_cur->nearest(a[0],a[1],NODE_TOL);
     if(n0<0) return vanilla;
@@ -536,10 +570,13 @@ static void hide_route(void* map){               // HideFastTravelPath(Animation
     alignas(16) uint8_t str[32]={0}; bool animate=false;
     g_strCtor(str,g_hideName); g_sendEvent((char*)map+0x208,str,&animate); g_strDtor(str);
 }
+// Is there a route line to show?  Not without a marker on the map (also while a missing marker is still
+// kept, see MARKER_GONE_MS), after arriving, or before a route is planned.
+static bool route_shown(){ return g_haveMarker && !g_goneT && !g_arrived && !g_route.empty() && g_cur; }
 static void draw_route(void* map,bool havePos,float px,float py){
     if(!g_showPath || !g_mapLine || !kc::is_a((uintptr_t)map,g_vtUIMap)) return;
     std::vector<Vec3f> pts;
-    if(!g_arrived && !g_route.empty() && g_cur){
+    if(route_shown()){
         if(havePos) pts.push_back({px,py,0});
         float lx=1e9f,ly=1e9f;
         for(size_t k=(size_t)std::max(0,g_prog);k<g_route.size();k++){
@@ -553,21 +590,39 @@ static void draw_route(void* map,bool havePos,float px,float py){
     VecView v{pts.data(),pts.data()+pts.size(),pts.data()+pts.size()};
     g_showPath(map,&v);
 }
-// Called in place of the map's checkpoint getter (map screen, game thread).
+// The map's marker refresh (map screen, game thread).  `shown`: the marker the map shows (rec 0: none,
+// the map hides the flag), or null if that could not be read.
+static void map_refresh(void* map,const Mk* shown,uint64_t now){
+    refresh_entity(true);
+    float mx=0,my=0,px=0,py=0; bool havePos=player_pos(px,py), haveMk=read_marker(mx,my,shown);
+    if(sync_destination(haveMk,mx,my,now) && haveMk && g_route.empty() && havePos){   // plan from where the rider is
+        Graph* gr=graph_at(px,py);
+        if(gr){ set_level(gr); int n0=gr->nearest(px,py,MARKER_SNAP); if(n0>=0){ bool mv=g_headOk; g_hx=mv?g_mhx:(g_faceOk?g_fx:0); g_hy=mv?g_mhy:(g_faceOk?g_fy:0); plan_from(n0,!mv); } }
+    }
+    draw_route(map,havePos,px,py);
+}
+// Called in place of the map's checkpoint getter (map screen, game thread).  The getter's result is the
+// marker the map shows, read as the game does right after (position at +0x50); null: the map has none.
 static void* CpHook(void* self,void* out){
     if(*g_map && *g_map!=(uintptr_t)self) logf("{\"ev\":\"map_moved\"}");   // the early lookup found another object
     *g_map=(uintptr_t)self;
     void* r=g_cpget(self,out);
     __try {
-        refresh_entity(true);
-        float mx=0,my=0,px=0,py=0; bool havePos=player_pos(px,py), haveMk=read_marker(mx,my);
-        if(sync_destination(haveMk,mx,my) && g_route.empty() && havePos){   // plan from where the rider is
-            Graph* gr=graph_at(px,py);
-            if(gr){ set_level(gr); int n0=gr->nearest(px,py,MARKER_SNAP); if(n0>=0){ bool mv=g_headOk; g_hx=mv?g_mhx:(g_faceOk?g_fx:0); g_hy=mv?g_mhy:(g_faceOk?g_fy:0); plan_from(n0,!mv); } }
-        }
-        draw_route(self,havePos,px,py);
+        Mk s{0,0,0}; bool known=rd((uintptr_t)out,&s.rec) && (!s.rec || (rd(s.rec+0x50,&s.x) && rd(s.rec+0x54,&s.y) && sane(s.x,s.y)));
+        map_refresh(self,known? &s : nullptr,GetTickCount64());
     } __except(EXCEPTION_EXECUTE_HANDLER){ logf("{\"ev\":\"map_line_error\",\"msg\":\"map line disabled for this session\"}"); g_showPath=nullptr; }
     return r;
+}
+// Called in place of the game's own HideFastTravelPath event (game thread), sent when it is done with the
+// path of a hovered fast-travel point, which it shows on the same line: put the route back.
+static void HideHook(void* elem,void* name,const bool* animate){
+    g_sendEvent(elem,name,animate);
+    static bool busy=false;                       // in case drawing the route ends up here itself
+    if(busy || !g_mapLine || !route_shown()) return;   // nothing of ours to show: the game's hide stands
+    busy=true;
+    __try { refresh_entity(true); float px=0,py=0; bool havePos=player_pos(px,py); draw_route((char*)elem-0x208,havePos,px,py); }
+    __except(EXCEPTION_EXECUTE_HANDLER){ logf("{\"ev\":\"map_line_error\",\"msg\":\"map line disabled for this session\"}"); g_showPath=nullptr; }
+    busy=false;
 }
 
 // ---------------- rider tracking + arrival (20 ms, off the game thread; reads memory only) ----------------
@@ -595,8 +650,9 @@ static void track_position(uint64_t now){
         if(g_speed<0.5f){ if(!stillT) stillT=now; else if(now-stillT>1000) g_stopT=now; } else stillT=0;
     }
     // Riding with a destination: auto-follow asked us about roads recently (it does not ask on long
-    // stretches without junctions, so allow a generous window) and the rider is moving.
-    if(g_endOk && !g_arrived && now-g_hookT<FOLLOW_MS && g_speed>1.5f){
+    // stretches without junctions, so allow a generous window) and the rider is moving.  Not for a marker
+    // missing for good, even before the game thread has cleared it.
+    if(g_endOk && !g_arrived && !marker_gone(now) && now-g_hookT<FOLLOW_MS && g_speed>1.5f){
         // Arrived: at the point of road closest to the marker.  Fallback: came within reach of the
         // marker and are now moving away again (took another road past it).
         float lead=g_arriveDist + g_speed*BRAKE_LEAD_S;
@@ -657,20 +713,20 @@ static void patch_call(uintptr_t site,uint8_t* stub){
 }
 
 // ---------------- address resolution ----------------
-struct Sites { uintptr_t fork, snap, cp, filter, cpget, fwglob, vtca, vtent, showpath, vtmap, hname, sctor, sdtor, send; };
+struct Sites { uintptr_t fork, snap, cp, filter, cpget, fwglob, vtca, vtent, showpath, vtmap, hname, sctor, sdtor, send, hide; };
 #ifdef KC_DEVTOOLS
 // Live reload (development builds only): the stub page records the game's original call targets,
 // so a newer copy injected into a running game can take the call sites over from the old one.
 static const uint64_t PAGE_MAGIC=0x4547415054414B43ull;   // "CKATPAGE"
-struct PageInfo { uint64_t magic; uintptr_t filter, cpget, ssUpdate; };
+struct PageInfo { uint64_t magic; uintptr_t filter, cpget, ssUpdate, send; };
 static PageInfo g_prev{};                         // the copy this one takes over from
 static const size_t PAGE_INFO=0xF80;
-static uintptr_t taken_over(uintptr_t site,bool getter){
+static uintptr_t taken_over(uintptr_t site,uintptr_t PageInfo::*target){
     if(!site || *(uint8_t*)site!=0xE8) return 0;
     uintptr_t t=kc::rel32(site+1), pg=t&~(uintptr_t)0xFFF;
     PageInfo pi{}; if(!rdn(pg+PAGE_INFO,&pi,sizeof pi) || pi.magic!=PAGE_MAGIC) return 0;
     g_prev=pi;
-    return getter? pi.cpget : pi.filter;
+    return pi.*target;
 }
 #endif
 // Resolves every game address; false (with the reasons logged) if this game build is not supported.
@@ -678,7 +734,7 @@ static bool resolve(kc::Resolver& R, Sites& s){
     s.fork=R.find("fork chooser call",SIG_FORK,0x9); s.snap=R.find("snap chooser call",SIG_SNAP,0x20); s.cp=R.find("map marker call",SIG_CP,0x8);
     uintptr_t f2=0;
 #ifdef KC_DEVTOOLS
-    if(uintptr_t o=taken_over(s.fork,false)){ s.filter=o; f2=taken_over(s.snap,false); s.cpget=taken_over(s.cp,true); logf("{\"ev\":\"live_reload\"}"); }
+    if(uintptr_t o=taken_over(s.fork,&PageInfo::filter)){ s.filter=o; f2=taken_over(s.snap,&PageInfo::filter); s.cpget=taken_over(s.cp,&PageInfo::cpget); logf("{\"ev\":\"live_reload\"}"); }
     else
 #endif
     { s.filter=R.branch("angle filter",s.fork); f2=R.branch("angle filter (snap)",s.snap); s.cpget=R.branch("marker getter",s.cp); }
@@ -689,7 +745,12 @@ static bool resolve(kc::Resolver& R, Sites& s){
     s.vtent=R.vtable("CEntity",".?AVCEntity@@",0); R.slot("CEntity::GetWorldPos",s.vtent,46,SIG_GETWORLDPOS);
     s.showpath=R.find("map path line",SIG_SHOWPATH); s.vtmap=R.vtable("C_UIMap",".?AVC_UIMap@guimodule@wh@@",0);
     uintptr_t h=R.find("map path hide",SIG_HIDEPATH);
-    if(h){ s.hname=R.riprel("hide event name",h+3); s.sctor=R.branch("string ctor",h+21); s.send=R.branch("send UI event",h+43); s.sdtor=R.branch("string dtor",h+53);
+    if(h){ s.hname=R.riprel("hide event name",h+3); s.sctor=R.branch("string ctor",h+21); s.sdtor=R.branch("string dtor",h+53); s.hide=h+43;
+#ifdef KC_DEVTOOLS
+           s.send=taken_over(s.hide,&PageInfo::send);   // live reload: the call goes to the old copy's HideHook
+           if(!s.send)
+#endif
+           s.send=R.branch("send UI event",s.hide);
            if(s.hname && strcmp((const char*)s.hname,"HideFastTravelPath")) R.fail("hide event name","unexpected string"); }
     return R.ok();
 }
@@ -753,7 +814,7 @@ static void* SsUpdateHook(void* self,void* a,void* b,void* c){
     // away from the route on auto-follow (see g_showWrong); never while standing or wandering about.
     uint64_t now=GetTickCount64();
     static uint64_t ot=0;
-    if(now-ot>=100){ ot=now; __try { orient_step(now); } __except(EXCEPTION_EXECUTE_HANDLER){ g_wrongWay=g_showWrong=false; } }
+    if(now-ot>=100){ ot=now; __try { marker_step(now); orient_step(now); } __except(EXCEPTION_EXECUTE_HANDLER){ g_wrongWay=g_showWrong=false; } }
     if(g_showWrong && now-g_sayT>2500){ g_sayT=now; notify(WRONG_WAY_LINE); }
     if(g_notice && g_ssExec){ __try { run_notice(self); } __except(EXCEPTION_EXECUTE_HANDLER){ g_ssExec=nullptr; logf("{\"ev\":\"notice_error\"}"); } }
     return r;
@@ -812,6 +873,10 @@ static void find_map(){                          // game thread
     __try { find_map_now(); } __except(EXCEPTION_EXECUTE_HANDLER){ g_getApse=nullptr; logf("{\"ev\":\"map_lookup_error\"}"); }
 }
 
+#ifdef KC_DEVTOOLS
+#include "autotravel_tests.inc"                   // KC_MarkerTest (tools/markertest)
+#endif
+
 // ---------------- startup ----------------
 static HMODULE g_self=nullptr;
 static DWORD WINAPI Init(LPVOID){
@@ -833,7 +898,7 @@ static DWORD WINAPI Init(LPVOID){
     if(!g_ng){ logf("{\"ev\":\"abort\",\"msg\":\"road graphs (.amg) missing next to the DLL\"}"); return 0; }
     g_page=alloc_near(s.fork); if(!g_page){ logf("{\"ev\":\"abort\",\"msg\":\"could not allocate the hook page\"}"); return 0; }
 #ifdef KC_DEVTOOLS
-    { PageInfo pi{PAGE_MAGIC,s.filter,s.cpget,0}; memcpy(g_page+PAGE_INFO,&pi,sizeof pi); }
+    { PageInfo pi{PAGE_MAGIC,s.filter,s.cpget,0,s.send}; memcpy(g_page+PAGE_INFO,&pi,sizeof pi); }
 #endif
     g_p0=(volatile uintptr_t*)(g_page+0xF00); g_p1=(volatile uintptr_t*)(g_page+0xF08); g_map=(volatile uintptr_t*)(g_page+0xF10);
     uint8_t* stubA=g_page+g_pos;                  // fork chooser: candidate r14 -> r15
@@ -842,8 +907,10 @@ static DWORD WINAPI Init(LPVOID){
     emit_rip_store(0x48,0x89,0x1D,g_p0); emit_rip_store(0x48,0x89,0x35,g_p1); emit_jmp_abs((void*)&FilterHook);
     uint8_t* stubM=g_page+g_pos;                  // map checkpoint getter
     emit_jmp_abs((void*)&CpHook);
+    uint8_t* stubH=g_page+g_pos;                  // the game hiding the map line
+    emit_jmp_abs((void*)&HideHook);
     g_brakeEvt=CreateEventA(nullptr,FALSE,FALSE,nullptr); CreateThread(nullptr,0,BrakeThread,nullptr,0,nullptr);
-    patch_call(s.fork,stubA); patch_call(s.snap,stubB); patch_call(s.cp,stubM);
+    patch_call(s.fork,stubA); patch_call(s.snap,stubB); patch_call(s.cp,stubM); patch_call(s.hide,stubH);
     install_map_lookup(R.im);
     {   // optional: without it, markers are never ignored (only matters in hardcore)
         kc::Resolver H; H.im=R.im;

@@ -1,5 +1,6 @@
-# Builds the mods on a Windows runner with the repo's own build.bat and tools/package.py, and attaches
-# the mod archives (dist\) and the development builds with the test tools (out\dev\) to the run.
+# Builds the mods on a Windows runner with the repo's own build.bat and tools/package.py (running the
+# Horse Route Follow marker tests in between), and attaches the mod archives (dist\) and the
+# development builds with the test tools (out\dev\) to the run.
 name: Build
 
 on:
@@ -31,6 +32,10 @@ jobs:
         env:
           KC_AUTHOR: Flubbermunchkin
         run: call build.bat
+
+      - name: Test (Horse Route Follow marker handling)
+        shell: cmd
+        run: out\dev\markertest.exe out\dev\kcd2_autotravel.dll
 
       - name: Package (tools/package.py)
         run: python tools\package.py

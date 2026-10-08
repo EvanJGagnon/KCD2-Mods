@@ -53,6 +53,7 @@ tools/
   mksig.py, whimg.py, xref.py    generate update-tolerant signatures from WHGame.dll (capstone, pefile)
   selftest.cpp                   resolve every signature of a mod against a WHGame.dll, offline
   routetest.cpp, sim_route.py    run the horse route planner offline
+  markertest.cpp                 Horse Route Follow's custom-marker regression tests (src/autotravel_tests.inc)
   gen_graph.py, ubernav.py       road graphs from the game's ubernav.tmm road data
   gen_recipes.py                 recipe table from the game's AlchemyRecipe.xml
   package.py                     build the release archives
@@ -71,13 +72,20 @@ python tools\package.py
 ```
 
 - `out\kcd2_*.dll` - release builds
-- `out\dev\` - development builds (`/DKC_DEVTOOLS`: self-test exports, horse-mod live reload) plus `selftest.exe` and `routetest.exe`
+- `out\dev\` - development builds (`/DKC_DEVTOOLS`: self-test exports, horse-mod live reload) plus `selftest.exe`, `routetest.exe` and `markertest.exe`
 - `dist\` - the mod archives
 
 `build.bat` expects Visual Studio 2022 Community; for another edition or the Build Tools, set `KC_VCVARS`
 to its `vcvars64.bat` first. Every push is also built on GitHub Actions
-([`.github/workflows/build.yml`](.github/workflows/build.yml)): a Windows runner runs `build.bat` and
-`tools\package.py` and attaches the mod archives and the `out\dev` builds to the run.
+([`.github/workflows/build.yml`](.github/workflows/build.yml)): a Windows runner runs `build.bat`, the
+marker tests and `tools\package.py` and attaches the mod archives and the `out\dev` builds to the run.
+
+Horse Route Follow's custom-marker regression tests (marker removal, a brief disappearance, a new marker,
+the route line around fast-travel hovering) run inside the development build:
+
+```bat
+out\dev\markertest.exe out\dev\kcd2_autotravel.dll
+```
 
 Self-test against a game DLL:
 

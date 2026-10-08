@@ -73,7 +73,7 @@ KNOWN ISSUES AND LIMITATIONS
     it still gets there.
   - Other traffic (wagons, NPCs) blocks the horse the same way it does in vanilla.
   - The map line is drawn when the map updates the marker. Hovering a fast-travel point shows the
-    game's own line instead; reopen the map to see the route again.
+    game's own line in its place; the route comes back when the pointer leaves the point.
   - Stopping works by briefly holding S; it is skipped if another program has focus.
   - Mods that change horse auto-follow ("road magnetism") or the map screen may not be compatible.
 
