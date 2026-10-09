@@ -4,15 +4,9 @@ Native (C++) mods for **Kingdom Come: Deliverance II**, loaded by the
 [Kingdom Come Script Extender (KCSE)](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332).
 
 > [!WARNING]
-> **Download these mods only from the official sources:** Nexus Mods (author **Flubbermunchkin**)
-> or this GitHub repository (**EvanJGagnon**).
-> These mods **never come with an installer, setup program or `.exe`**. Each release is a small zip
-> (under 1 MB) holding one mod folder that you copy into the game's `Mods` folder.
-> Copies of these mods have been posted on other sites by unrelated accounts. They offer much larger
-> downloads and tell you to "run the installer". **Those are not from us. Do not run them.** If you
-> already did, scan your PC and change the passwords saved in your browser.
-> Redistribution under GPL-3.0 is welcome when it credits the original author, links to this
-> repository and includes the license. To report a copy that doesn't, please open an issue.
+> **Only download these mods from Nexus Mods (Flubbermunchkin) or this repository.** They never come
+> with an installer or `.exe`. Copies of Theatrical AutoForge and Theatrical Autobrew on other sites that
+> tell you to "run the installer" are not ours. Don't run them.
 
 | Mod | What it does | Key |
 |---|---|---|
