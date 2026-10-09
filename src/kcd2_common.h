@@ -42,7 +42,7 @@ inline void init(HMODULE self, const char* name) {
     char p[MAX_PATH]; char f[96]; sprintf_s(f, "%s.log", name); path(p, sizeof p, f);
     g_log = _fsopen(p, "w", _SH_DENYNO);          // fresh log each session
     char ini[MAX_PATH]; sprintf_s(f, "%s.ini", name); path(ini, sizeof ini, f);
-    g_debug = GetPrivateProfileIntA("Options", "DebugLog", 0, ini) != 0;
+    g_debug = GetPrivateProfileIntA("Options", "DebugLog", 1, ini) != 0;   // on unless the .ini says DebugLog=0
 }
 
 // Key from <name>.ini [Keys]: "F1".."F12", a single letter/digit, or a number (virtual-key code).

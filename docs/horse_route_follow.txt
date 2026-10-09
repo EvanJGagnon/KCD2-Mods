@@ -1,4 +1,4 @@
-HORSE ROUTE FOLLOW 1.1.2 - Kingdom Come: Deliverance II
+HORSE ROUTE FOLLOW 1.1.3 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 The game's horse auto-follow picks a branch at random at every fork. With this mod it follows
@@ -61,9 +61,6 @@ KNOWN ISSUES AND LIMITATIONS
   - Only tested with the Steam version of the game (1.5.x, build 15693).
   - Regions: Trosecko is well tested; Kuttenberg and the monastery map are included but have had
     little testing.
-  - Routes can sometimes take an odd detour even when a more direct main road exists. This is a
-    known bug in how the mod reads the game's road network; the route is still valid and gets you
-    there. A fix is planned.
   - The horse cannot turn around by itself: when you start off facing away from the route you
     are told to turn around (see HOW IT BEHAVES).
   - Only roads the game can auto-follow are used, so routes can differ from what the map shows,
@@ -98,6 +95,17 @@ LICENSE
   GNU GPL v3 (LICENSE.txt). Source code: https://github.com/EvanJGagnon/KCD2-Mods
 
 CHANGES
+  1.1.3  - Removing the custom marker now clears the route and the dotted line on the map (the
+           line used to stay behind).
+         - Rebuilt the road data so roads only join where the game itself joins them (the old data
+           had made-up junctions, which caused odd detours and wrong turns).
+         - The route is planned once per destination and only planned again if you place or move
+           the marker, change region, or really leave the route.
+         - Starting off while moving never makes the route turn round unless that saves a long way;
+           when a route does need a U-turn you get the "Wrong way" notice instead of a surprise.
+         - Blocked stretches (a locked gate you had to stop at) are avoided for a while.
+         - The arrival stop only happens on horseback.
+         - A marker at an unset (0,0) position is ignored.
   1.1.2  - Fixed being routed to the wrong place when the map holds an extra, invisible marker:
            the route now follows the marker you placed or moved last (moving your marker used to
            change nothing, and the mod went idle after reaching the wrong spot).

@@ -1,16 +1,20 @@
 # gen_graph.py: ubernav.tmm (auto-followable roads, flag u8=1) -> compact road graph <level>.amg
-# usage: python gen_graph.py [output dir]
+# usage: python gen_graph.py [output dir]   (only roads with u8=1: the network auto-follow rides)
 # format: 'AMG1', u32 nnodes, u32 nedges, nnodes*(f32 x,f32 y), nedges*(u32 a,u32 b,f32 len,f32 cost)
 import struct,math,collections,sys,os
 from ubernav import load,parse
 def mult(f1): return 1.0 if f1>=1.0 else (1.4 if f1>=0.5 else 2.5)
-def build(level,out,snap=2.0):
+# Junctions: points of different roads that coincide (within 0.1 m) become one node -- exactly how the
+# game joins its roads (all ubernav points de-duplicated this way give the game's own road-node count,
+# e.g. 15329 in trosecko).  The old 2 m merge chained along dense roads and fused roads that merely pass
+# close by (no real junction, e.g. at Trosky castle), so routes could use turns auto-follow cannot make.
+def build(level,out,snap=0.1):
     recs,_,_=parse(load(level))
-    pts=[];edges=[]
+    pts=[];zs=[];edges=[]
     for r in recs:
         if r['u8']!=1: continue
         b=len(pts)
-        for p in r['pts']: pts.append((p[1],p[2]))
+        for p in r['pts']: pts.append((p[1],p[2])); zs.append(p[3])
         for i in range(len(r['pts'])-1): edges.append((b+i,b+i+1,mult(r['f1'])))
     parent=list(range(len(pts)))
     def f(x):
@@ -23,7 +27,7 @@ def build(level,out,snap=2.0):
             for dy in (-1,0,1):
                 for j in g.get((gx+dx,gy+dy),()):
                     for i in ids:
-                        if i<j and math.dist(pts[i],pts[j])<=snap: parent[f(i)]=f(j)
+                        if i<j and math.dist(pts[i],pts[j])<=snap and abs(zs[i]-zs[j])<=1.0: parent[f(i)]=f(j)   # same place AND same height
     rep={};acc=collections.defaultdict(lambda:[0,0,0])
     for i,p in enumerate(pts):
         a=acc[f(i)]; a[0]+=p[0];a[1]+=p[1];a[2]+=1

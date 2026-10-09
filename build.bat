@@ -18,5 +18,6 @@ for %%m in (autoforge alchemy autotravel) do (
 cl %CF% /LD src\hardcore_markers.cpp /Foout\obj\ /Feout\kcd2_hardcore_markers.dll %LF% || exit /b 1
 cl /nologo /O2 tools\selftest.cpp /Foout\obj\ /Feout\dev\selftest.exe || exit /b 1
 cl /nologo /O2 tools\routetest.cpp /Foout\obj\ /Feout\dev\routetest.exe || exit /b 1
+cl /nologo /O2 tools\markertest.cpp /Foout\obj\ /Feout\dev\kc_markertest.exe || exit /b 1
 del /q out\*.exp out\*.lib out\dev\*.exp out\dev\*.lib 2>nul
 echo Build OK.
