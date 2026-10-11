@@ -274,7 +274,7 @@ static DWORD WINAPI Init(LPVOID){
     g_autoExit=kc::ini_int("Options","AutoExit",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v1.0.0 (game ts 0x%08X)",R.im.timestamp);
+    logf("start v1.0.1 (game ts 0x%08X)",R.im.timestamp);
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pPedal=(Pedal_t)f.pedal; pPosDir=(Dir_t)f.posdir; pRotDir=(Dir_t)f.rotdir;
@@ -289,5 +289,5 @@ static DWORD WINAPI Init(LPVOID){
     char kn[16]; logf("ready (%s at the grindstone)%s",kc::key_name(g_key.vk,kn,sizeof kn),g_autoExit? ", gets up when done":"");
     return 0;
 }
-KC_PLUGIN("Theatrical AutoSharpening", KC_AUTHOR, 100)
+KC_PLUGIN("Theatrical AutoSharpening", KC_AUTHOR, 101)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){ if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); } return TRUE; }

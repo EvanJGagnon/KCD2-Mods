@@ -1,4 +1,4 @@
-THEATRICAL AUTOSHARPENING 1.0.0 - Kingdom Come: Deliverance II
+THEATRICAL AUTOSHARPENING 1.0.1 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 Henry sharpens the weapon himself at the grindstone while you watch. The mod plays the sharpening
@@ -38,7 +38,7 @@ HOW TO USE
   pressure control for the player, unlike the first game), so the mod leaves pressure alone.
 
 SETTINGS  (Mods\theatrical_autosharpening\KCSE\Plugins\kcd2_autosharpen.ini)
-  [Keys]    Sharpen=F7      start/stop key (F1-F12, a letter, or a virtual-key code)
+  [Keys]    Sharpen=F7      start/stop key (F1-F12, a letter or digit, or a symbol key such as ])
   [Options] AutoExit=1      1 = get up from the grindstone when the edge is sharp
             DebugLog=0      1 = detailed log for bug reports
 
@@ -66,4 +66,6 @@ LICENSE
   GNU GPL v3 (LICENSE.txt). Source code: https://github.com/EvanJGagnon/KCD2-Mods
 
 CHANGES
+  1.0.1  - The key setting now accepts symbol keys such as ] or [; a key value the mod
+           does not understand is reported in the log instead of silently using the default.
   1.0.0  - First release.

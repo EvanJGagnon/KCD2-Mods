@@ -1,4 +1,4 @@
-THEATRICAL AUTOBREW 1.0.1 - Kingdom Come: Deliverance II
+THEATRICAL AUTOBREW 1.0.2 - Kingdom Come: Deliverance II
 by Flubbermunchkin - an adaptation of Autobrew by JerryYOJ
 
 Open a recipe in the alchemy book, press F8, and Henry brews it - visibly, step by step, in real
@@ -39,7 +39,7 @@ HOW TO USE
   3. Press F8 again at any time to stop.
 
 SETTINGS  (Mods\theatrical_autobrew\KCSE\Plugins\kcd2_alchemy.ini)
-  [Keys]    Brew=F8         start/stop key (F1-F12, a letter, or a virtual-key code)
+  [Keys]    Brew=F8         start/stop key (F1-F12, a letter or digit, or a symbol key such as ])
   [Options] DebugLog=0      1 = detailed log for bug reports
 
 TESTED
@@ -76,6 +76,8 @@ LICENSE
   ported Autobrew parts, is available as a separate download on the Nexus page.
 
 CHANGES
+  1.0.2  - The key setting now accepts symbol keys such as ] or [; a key value the mod
+           does not understand is reported in the log instead of silently using the default.
   1.0.1  - Improved ingredient quality handling and diagnostics.
          - Prioritizes the healthiest suitable fresh herb stack.
          - Uses dried herbs only when a suitable fresh stack isn't available.

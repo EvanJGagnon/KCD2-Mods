@@ -6,16 +6,16 @@ R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 VER = '1.0.0'
 AUTHOR = 'Flubbermunchkin'
 DATA = os.path.join(R, 'data')
-KEYHELP = '; key: F1-F12, a letter, or a virtual-key code\n'
+KEYHELP = '; key: F1-F12, a letter or digit, or a symbol key such as ]\n'
 DEBUG = '; 1 = write a detailed log (for bug reports)\nDebugLog=0\n'
 
 MODS = [
     dict(folder='theatrical_autoforge', title='Theatrical AutoForge', zip='TheatricalAutoForge', dll='kcd2_autoforge.dll', data=[],
-         desc='Henry forges the chosen piece himself, stroke by stroke, through the game\'s own forge actions (F9).', ver='1.1.0',
+         desc='Henry forges the chosen piece himself, stroke by stroke, through the game\'s own forge actions (F9).', ver='1.1.1',
          ini='[Keys]\n' + KEYHELP + 'Forge=F9\n\n[Options]\n'
              '; turn the piece over once at this % completion, like a smith would (0 = only when a side is worked out)\nFlipAt=50\n' + DEBUG),
     dict(folder='theatrical_autobrew', title='Theatrical Autobrew', zip='TheatricalAutobrew', dll='kcd2_alchemy.dll', data=['alch_recipes.txt'],
-         desc='Henry brews the open recipe step by step, in real time (F8). An adaptation of Autobrew by JerryYOJ.', ver='1.0.1',
+         desc='Henry brews the open recipe step by step, in real time (F8). An adaptation of Autobrew by JerryYOJ.', ver='1.0.2',
          ini='[Keys]\n' + KEYHELP + 'Brew=F8\n\n[Options]\n' + DEBUG),
     dict(folder='horse_route_follow', title='Horse Route Follow', zip='HorseRouteFollow', dll='kcd2_autotravel.dll',
          data=['trosecko.amg', 'kutnohorsko.amg', 'klaster.amg'],
@@ -28,7 +28,7 @@ MODS = [
              '; routes always start the way you are travelling; a later turn-around (dead end) counts as this many extra metres\nUTurnPenalty=400\n'
              '; 1 = draw the planned route on the map\nMapRoute=1\n' + DEBUG),
     dict(folder='theatrical_autosharpening', title='Theatrical AutoSharpening', zip='TheatricalAutoSharpening', dll='kcd2_autosharpen.dll', data=[],
-         desc="Henry sharpens the weapon himself at the grindstone, through the game's own controls (F7).",
+         desc="Henry sharpens the weapon himself at the grindstone, through the game's own controls (F7).", ver='1.0.1',
          ini='[Keys]\n' + KEYHELP + 'Sharpen=F7\n\n[Options]\n; 1 = get up from the grindstone when the edge is sharp\nAutoExit=1\n' + DEBUG),
     dict(folder='horse_route_follow_hardcore', title='Horse Route Follow - Hardcore Map Markers', zip='HorseRouteFollow-HardcoreMapMarkers',
          dll='kcd2_hardcore_markers.dll', data=[], ver='1.1.0', ini=None, readme='hardcore_map_markers',

@@ -446,7 +446,7 @@ static DWORD WINAPI Init(LPVOID){
     g_flipAtPct=std::min(95,std::max(0,kc::ini_int("Options","FlipAt",50)));
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v1.1.0 (game ts 0x%08X) flip at %d%%",R.im.timestamp,g_flipAtPct);
+    logf("start v1.1.1 (game ts 0x%08X) flip at %d%%",R.im.timestamp,g_flipAtPct);
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pWorkMap=f.workmap;
@@ -456,5 +456,5 @@ static DWORD WINAPI Init(LPVOID){
     char kn[16]; logf("ready (%s at the forge)",kc::key_name(g_key.vk,kn,sizeof kn));
     return 0;
 }
-KC_PLUGIN("Theatrical AutoForge", KC_AUTHOR, 110)
+KC_PLUGIN("Theatrical AutoForge", KC_AUTHOR, 111)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){ if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); } return TRUE; }

@@ -45,24 +45,44 @@ inline void init(HMODULE self, const char* name) {
     g_debug = GetPrivateProfileIntA("Options", "DebugLog", 1, ini) != 0;   // on unless the .ini says DebugLog=0
 }
 
-// Key from <name>.ini [Keys]: "F1".."F12", a single letter/digit, or a number (virtual-key code).
+// Key from <name>.ini [Keys]: "F1".."F24", a letter or digit, a symbol key as printed on the keyboard
+// (e.g. "]", looked up in the active keyboard layout), or a Windows virtual-key code (e.g. 0xDD).
+// Anything else falls back to the default and says so in the log.
+inline int parse_key(const char* v, int def) {
+    char b[32]; strncpy_s(b, v, _TRUNCATE);
+    char* s = b; while (*s == ' ' || *s == '\t') s++;
+    for (size_t n = strlen(s); n && (s[n - 1] == ' ' || s[n - 1] == '\t'); ) s[--n] = 0;
+    if (!*s) return def;
+    if ((s[0] == 'F' || s[0] == 'f') && s[1] >= '1' && s[1] <= '9') {
+        char* e; long n = strtol(s + 1, &e, 10); if (!*e && n >= 1 && n <= 24) return VK_F1 + (int)n - 1;
+    }
+    if (!s[1]) {
+        char c = s[0];
+        if (c >= 'a' && c <= 'z') c -= 32;
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return c;
+        SHORT r = VkKeyScanExA(c, GetKeyboardLayout(0));
+        if (r != -1 && (r & 0xFF)) return r & 0xFF;
+    }
+    char* e; long n = strtol(s, &e, 0);
+    if (!*e && n > 0 && n < 256) return (int)n;
+    return 0;   // not understood
+}
 inline int ini_key(const char* key, int def) {
     char p[MAX_PATH]; char f[96]; sprintf_s(f, "%s.ini", g_name); path(p, sizeof p, f);
     char v[32] = {0}; GetPrivateProfileStringA("Keys", key, "", v, sizeof v, p);
-    char* s = v; while (*s == ' ') s++;
-    if (!*s) return def;
-    if ((s[0] == 'F' || s[0] == 'f') && s[1] >= '1' && s[1] <= '9') { int n = atoi(s + 1); if (n >= 1 && n <= 24) return VK_F1 + n - 1; }
-    if (!s[1] && ((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= '0' && s[0] <= '9'))) return s[0];
-    if (!s[1] && s[0] >= 'a' && s[0] <= 'z') return s[0] - 32;
-    int n = (int)strtol(s, nullptr, 0); return (n > 0 && n < 256) ? n : def;
+    int vk = parse_key(v, def);
+    if (!vk) { logf("[Keys] %s=%s is not a key this mod understands - using the default", key, v); vk = def; }
+    return vk;
 }
 inline int ini_int(const char* sec, const char* key, int def) {
     char p[MAX_PATH]; char f[96]; sprintf_s(f, "%s.ini", g_name); path(p, sizeof p, f);
     return (int)GetPrivateProfileIntA(sec, key, def, p);
 }
 inline const char* key_name(int vk, char* buf, size_t cap) {
+    UINT ch = MapVirtualKeyA((UINT)vk, MAPVK_VK_TO_CHAR) & 0x7FFF;
     if (vk >= VK_F1 && vk <= VK_F24) sprintf_s(buf, cap, "F%d", vk - VK_F1 + 1);
     else if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9')) sprintf_s(buf, cap, "%c", vk);
+    else if (ch > ' ' && ch < 0x7F) sprintf_s(buf, cap, "%c (VK 0x%02X)", ch, vk);
     else sprintf_s(buf, cap, "VK 0x%02X", vk);
     return buf;
 }

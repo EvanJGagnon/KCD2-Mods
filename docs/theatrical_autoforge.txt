@@ -1,4 +1,4 @@
-THEATRICAL AUTOFORGE 1.1.0 - Kingdom Come: Deliverance II
+THEATRICAL AUTOFORGE 1.1.1 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 Henry forges the piece himself, stroke by stroke, while you watch. The mod plays the
@@ -30,7 +30,7 @@ HOW TO USE
   3. When the piece is finished the game's own quench runs; check the result as usual.
 
 SETTINGS  (Mods\theatrical_autoforge\KCSE\Plugins\kcd2_autoforge.ini)
-  [Keys]    Forge=F9        start/stop key (F1-F12, a letter, or a virtual-key code)
+  [Keys]    Forge=F9        start/stop key (F1-F12, a letter or digit, or a symbol key such as ])
   [Options] FlipAt=50       turn the piece over once at this % completion (0 = only when a side is
                             worked out, as in 1.0.0)
             DebugLog=0      1 = detailed log for bug reports
@@ -59,6 +59,8 @@ BUG REPORTS
   DebugLog=1 set in the .ini, and say what you were forging.
 
 CHANGES
+  1.1.1  - The key setting now accepts symbol keys such as ] or [; a key value the mod
+           does not understand is reported in the log instead of silently using the default.
   1.1.0  - Henry now turns the piece over about halfway through (setting FlipAt). Turning it
            breaks the hammering rhythm for a few strokes, so those strokes go to fresh spots on
            the new side, where they still count in full, so the flip costs little or no quality.

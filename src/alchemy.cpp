@@ -447,7 +447,7 @@ static DWORD WINAPI Init(LPVOID){
     g_key.vk=kc::ini_key("Brew",VK_F8);
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v1.0.1 (game ts 0x%08X)",R.im.timestamp);
+    logf("start v1.0.2 (game ts 0x%08X)",R.im.timestamp);
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pPerformVerb=(PerformVerb_t)f.perform; pCanPerformVerb=(CanPerformVerb_t)f.can;
@@ -463,5 +463,5 @@ static DWORD WINAPI Init(LPVOID){
     char kn[16]; logf("ready (%s on a recipe page)",kc::key_name(g_key.vk,kn,sizeof kn));
     return 0;
 }
-KC_PLUGIN("Theatrical Autobrew", KC_AUTHOR, 101)
+KC_PLUGIN("Theatrical Autobrew", KC_AUTHOR, 102)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){ if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); } return TRUE; }
