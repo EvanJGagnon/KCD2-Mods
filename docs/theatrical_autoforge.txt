@@ -1,11 +1,12 @@
-THEATRICAL AUTOFORGE 1.0.0 - Kingdom Come: Deliverance II
+THEATRICAL AUTOFORGE 1.1.0 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 Henry forges the piece himself, stroke by stroke, while you watch. The mod plays the
 blacksmithing minigame through the game's own forge actions: it heats the piece zone by zone
 with the bellows, keeps the fire below the point where the metal burns, carries it to the anvil,
-hammers in time with the forge music, flips it when one side is worked out, reheats when it
-cools, and hands it over for the quench. Nothing is skipped or completed instantly.
+hammers in time with the forge music, turns the piece over about halfway (and again if one side
+is worked out), reheats when it cools, and hands it over for the quench. Nothing is skipped or
+completed instantly.
 
 This is one of our first mods for this game. It has been tested on one setup only, so expect
 issues we have not run into yet - please report them (see BUG REPORTS below).
@@ -30,7 +31,9 @@ HOW TO USE
 
 SETTINGS  (Mods\theatrical_autoforge\KCSE\Plugins\kcd2_autoforge.ini)
   [Keys]    Forge=F9        start/stop key (F1-F12, a letter, or a virtual-key code)
-  [Options] DebugLog=0      1 = detailed log for bug reports
+  [Options] FlipAt=50       turn the piece over once at this % completion (0 = only when a side is
+                            worked out, as in 1.0.0)
+            DebugLog=0      1 = detailed log for bug reports
 
 TESTED
   Sword, long sword, axe, mace and horseshoe, with results around 0.97-0.99 quality.
@@ -55,10 +58,16 @@ BUG REPORTS
   Please include kcd2_autoforge.log (next to the DLL, rewritten every session), ideally with
   DebugLog=1 set in the .ini, and say what you were forging.
 
+CHANGES
+  1.1.0  - Henry now turns the piece over about halfway through (setting FlipAt). Turning it
+           breaks the hammering rhythm for a few strokes, so those strokes go to fresh spots on
+           the new side, where they still count in full, so the flip costs little or no quality.
+
 CREDITS
+  - cpk (Nexus Mods) for suggesting automatic workpiece flipping.
   - JerryYOJ for KCSE and the Address Library, and for libKCD2 (github.com/JerryYOJ/libKCD2),
     whose public reverse-engineering notes helped with parts of the research.
   - Warhorse Studios for Kingdom Come: Deliverance II.
 
 LICENSE
-  GNU GPL v3 (LICENSE.txt). The source code is available as a separate download on the Nexus page.
+  GNU GPL v3 (LICENSE.txt). Source code: https://github.com/EvanJGagnon/KCD2-Mods

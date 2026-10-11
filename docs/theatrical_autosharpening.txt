@@ -1,0 +1,69 @@
+THEATRICAL AUTOSHARPENING 1.0.0 - Kingdom Come: Deliverance II
+by Flubbermunchkin
+
+Henry sharpens the weapon himself at the grindstone while you watch. The mod plays the sharpening
+minigame through the game's own grindstone controls: it pushes the pedal in a steady rhythm to keep
+the wheel turning, raises the blade to the right angle and corrects it whenever the wheel knocks it
+down, and draws the blade across the stone in steady passes from one end of the edge to the other
+until every part of the edge is at 100%. Then he takes the blade off the wheel, puts it away and gets up,
+just as when you press the exit key.
+The game does all of the actual sharpening and decides the result; the mod never changes the
+weapon's condition itself.
+
+This is one of our first mods for this game. It has been tested on one setup only, so expect
+issues we have not run into yet - please report them (see BUG REPORTS below).
+
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
+
+INSTALL
+  Vortex: install as usual.
+  Manual: copy the "theatrical_autosharpening" folder from this archive into <game>\Mods\
+          (you should end up with <game>\Mods\theatrical_autosharpening\KCSE\Plugins\kcd2_autosharpen.dll).
+  Uninstall: delete that folder.
+
+HOW TO USE
+  1. Sit at a grindstone and pick the weapon to sharpen, as usual.
+  2. Press F7. Press F7 again at any time to stop and take over by hand.
+  3. When the whole edge is at 100% Henry stops and gets up (set AutoExit=0 to stay seated, e.g. to
+     sharpen another weapon). On a weapon that is already at 100% he just gets up.
+
+  Pedalling costs stamina, as it does when you sharpen by hand. When Henry is out of breath he stops
+  pedalling for a moment and carries on once he has recovered.
+
+  About pressure: in KCD2 the player always grinds at the game's fixed full pressure (there is no
+  pressure control for the player, unlike the first game), so the mod leaves pressure alone.
+
+SETTINGS  (Mods\theatrical_autosharpening\KCSE\Plugins\kcd2_autosharpen.ini)
+  [Keys]    Sharpen=F7      start/stop key (F1-F12, a letter, or a virtual-key code)
+  [Options] AutoExit=1      1 = get up from the grindstone when the edge is sharp
+            DebugLog=0      1 = detailed log for bug reports
+
+KNOWN ISSUES AND LIMITATIONS
+  - Only tested with the Steam version of the game (1.5.x, build 15693).
+  - Moving the mouse while the mod is sharpening moves the blade too; the mod corrects it, but it
+    is best to leave the mouse alone.
+  - If you interrupt the sharpening (leave, open a menu), the mod stops; start it again with F7.
+
+GAME UPDATES
+  The mod does not use fixed memory addresses. At startup it finds the game code it needs by
+  pattern and by class name. If a game update changes that code, the mod turns itself off and
+  changes nothing. The log then says "disabled: this game version is not supported yet".
+
+BUG REPORTS
+  Please include kcd2_autosharpen.log (next to the DLL, rewritten every session), ideally with
+  DebugLog=1 set in the .ini, and say which weapon you were sharpening.
+
+CREDITS
+  - cpk (Nexus Mods) for suggesting the idea.
+  - JerryYOJ for KCSE and the Address Library.
+  - Warhorse Studios for Kingdom Come: Deliverance II.
+
+LICENSE
+  GNU GPL v3 (LICENSE.txt). Source code: https://github.com/EvanJGagnon/KCD2-Mods
+
+CHANGES
+  1.0.0  - First release.

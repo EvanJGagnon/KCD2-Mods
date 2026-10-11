@@ -1,4 +1,4 @@
-# KCD2 Mods - Theatrical AutoForge, Theatrical Autobrew, Horse Route Follow
+# KCD2 Mods - Theatrical AutoForge, Theatrical Autobrew, Theatrical AutoSharpening, Horse Route Follow
 
 Native (C++) mods for **Kingdom Come: Deliverance II**, loaded by the
 [Kingdom Come Script Extender (KCSE)](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332).
@@ -12,8 +12,9 @@ Native (C++) mods for **Kingdom Come: Deliverance II**, loaded by the
 |---|---|---|
 | **[Horse Route Follow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3742)** | Horse auto-follow takes the right turn at every fork to reach your custom map marker. The route is drawn on the map like fast travel, the route is recalculated only if you leave it, and the horse stops on the road closest to the marker. Always on while a marker is placed. | none |
 | **Hardcore Map Markers** (optional file of Horse Route Follow) | Allows custom map markers in hardcore mode (map only, not the compass), so Horse Route Follow works there too. | none |
-| **[Theatrical AutoForge](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3743)** | Henry forges the chosen piece himself, stroke by stroke: heating, bellows, hammering in rhythm, flipping, reheating and quench - all through the game's own forge actions. | F9 |
+| **[Theatrical AutoForge](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3743)** | Henry forges the chosen piece himself, stroke by stroke: heating, bellows, hammering in rhythm, turning it over halfway, reheating and quench - all through the game's own forge actions. | F9 |
 | **[Theatrical Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3744)** | Henry brews the recipe open in the alchemy book on screen, step by step and in real time. **An adaptation of [Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3394) by JerryYOJ** (see below). | F8 |
+| **[Theatrical AutoSharpening](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3802)** | Henry sharpens the weapon himself at the grindstone: pedalling, holding the angle and working the edge end to end until it is at 100%, then gets up. Idea by [cpk](https://www.nexusmods.com/profile/cpk). | F7 |
 
 ![Horse Route Follow - route drawn on the map](media/horse_route_follow_map.jpg)
 
@@ -27,7 +28,8 @@ Native (C++) mods for **Kingdom Come: Deliverance II**, loaded by the
 Downloads, install instructions and support are on Nexus Mods:
 [Horse Route Follow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3742) -
 [Theatrical AutoForge](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3743) -
-[Theatrical Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3744)
+[Theatrical Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3744) -
+[Theatrical AutoSharpening](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3802)
 Each mod needs:
 
 - [Kingdom Come Script Extender (KCSE)](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332) by JerryYOJ
@@ -52,12 +54,14 @@ src/autotravel.cpp   Horse Route Follow    -> kcd2_autotravel.dll
 src/hardcore_markers.cpp  Hardcore Map Markers  -> kcd2_hardcore_markers.dll
 src/autoforge.cpp    Theatrical AutoForge  -> kcd2_autoforge.dll
 src/alchemy.cpp      Theatrical Autobrew   -> kcd2_alchemy.dll
+src/autosharpen.cpp  Theatrical AutoSharpening -> kcd2_autosharpen.dll
 data/                road graphs (*.amg) and the recipe table, generated from the game's own data
 docs/                the README shipped with each mod
 tools/
   mksig.py, whimg.py, xref.py    generate update-tolerant signatures from WHGame.dll (capstone, pefile)
   selftest.cpp                   resolve every signature of a mod against a WHGame.dll, offline
   routetest.cpp, sim_route.py    run the horse route planner offline
+  forgesim.cpp, sharpsim.cpp     run AutoForge / AutoSharpening against a simulated minigame
   gen_graph.py, ubernav.py       road graphs from the game's ubernav.tmm road data
   gen_recipes.py                 recipe table from the game's AlchemyRecipe.xml
   package.py                     build the release archives
@@ -76,7 +80,7 @@ python tools\package.py
 ```
 
 - `out\kcd2_*.dll` - release builds
-- `out\dev\` - development builds (`/DKC_DEVTOOLS`: self-test exports, horse-mod live reload) plus `selftest.exe` and `routetest.exe`
+- `out\dev\` - development builds (`/DKC_DEVTOOLS`: self-test exports, horse-mod live reload) plus `selftest.exe`, `routetest.exe` and the simulators
 - `dist\` - the mod archives
 
 `build.bat` expects Visual Studio 2022 Community; for another edition or the Build Tools, set `KC_VCVARS`
@@ -99,7 +103,8 @@ regenerate its pattern with `tools/mksig.py`.
 - **JerryYOJ** - [Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3394): Theatrical Autobrew is
   an adaptation of it; its recipe planner and brewing logic (`src/alchemy.cpp`) are ported from Autobrew's
   public source in [libKCD2](https://github.com/JerryYOJ/libKCD2) (Projects/Autobrew, GPL-3.0). Also KCSE, the
-  Address Library and libKCD2, whose public research notes helped with parts of the other two mods.
+  Address Library and libKCD2, whose public research notes helped with parts of the other mods.
+- **cpk** - suggested AutoSharpening and AutoForge's halfway flip.
 - **Warhorse Studios** - Kingdom Come: Deliverance II.
 
 ## License

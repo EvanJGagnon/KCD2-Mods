@@ -13,6 +13,7 @@
 #include <algorithm>
 
 static uintptr_t B = 0;
+static uint64_t (*g_clock)() = GetTickCount64;   // dev builds: tools/forgesim drives time
 typedef void (*Update_t)(void*, float);
 static Update_t pOrigUpdate = nullptr;
 using kc::logf;
@@ -92,6 +93,13 @@ static const float STAM_LOW=3.f;           // stamina finds its own equilibrium 
 // break score a baseline.  So: rigid beat grid, fixed hold, as few breaks as possible.
 static const uint64_t STROKE_PERIOD=1333,   // 45 BPM = blacksmith_045 music track (43..47 band)
                        STROKE_HOLD=600, EVAL_DELAY=650;
+// Planned flip.  Turning the piece breaks the game's rhythm (any gap more than wh_pl_BlacksmithTimingTolerance
+// = 0.28 s off the beat resets it, 0x11e0064), so the next 3 strokes get no rhythmic bonus.  Without the bonus a
+// stroke's effectivity is ~0.7 + 0.7 * work-map value (fitted from logged strokes), so a spot with work >= 0.45
+// still gives a full stroke: those 3 strokes aim at the freshest spot instead of costing quality.
+static int g_flipAtPct=50;                  // [Options] FlipAt: turn the piece over at this % completion (0 = only when needed)
+static const float FRESH_MIN=0.45f;
+static const int RHYTHM_STROKES=3;          // strokes after a rhythm break that score without the bonus
 
 // ---------------- hammer-point learner ----------------
 static const int GX=9, GY=9;
@@ -102,6 +110,8 @@ static bool inb(const Bounds& b,float x,float y){ return x>=b.x0-0.02f&&x<=b.x1+
 static uint32_t g_rng=0x1234567;
 static float rnd(){ g_rng=g_rng*1664525u+1013904223u; return (g_rng>>8)/16777216.f; }
 static int g_ci=-1,g_cj=-1; static float g_tx=0.5f,g_ty=0.5f;
+static int g_fresh=0;                       // strokes left that should land on a fresh spot (set after a flip)
+static int g_flips=0, g_afterFlipLog=0;
 static void choose_point(){
     Bounds b=bounds(); int ny=g_2d?GY:1;
     auto& C=g_cells[g_side];
@@ -139,12 +149,24 @@ static const WP HORSESHOE[]={ {0.82f,0.34f},{0.72f,0.34f},{0.62f,0.34f},{0.52f,0
     {0.22f,0.77f},{0.32f,0.78f},{0.42f,0.78f},{0.52f,0.78f},{0.62f,0.78f},{0.72f,0.79f},{0.82f,0.80f} };
 static const WP* g_path=nullptr; static int g_pn=0, g_pi=0, g_pdir=1, g_pk=-1;
 static int g_pmiss[64]; static float g_poff[64]; static bool g_preAimed=false;
+// The seeded path was traced on side 0.  How the turned-over piece lines up is not known yet, so on a flipped side
+// the path is kept as is until it misses twice in a row without a hit; then it is mirrored along x (once per side).
+static bool g_pathMirror[2], g_mirrorDecided[2]; static int g_sideMisses=0;
+static float path_x(int k){ float x=g_path[k].x; return g_pathMirror[g_side]? 0.84f-x : x; }   // traced x spans 0.02..0.82
 static bool path_point(){
     if(!g_path) return false;
+    if(g_fresh>0){                                                    // no rhythm yet: the freshest spot on the path
+        int bk=-1; float bw=FRESH_MIN;
+        for(int k=0;k<g_pn;k++){ if(g_pmiss[k]>=3) continue; float w=remainingAt(path_x(k),g_path[k].y+g_poff[k]); if(w>=bw){ bw=w; bk=k; } }
+        if(bk>=0){
+            g_pi=bk+g_pdir; if(g_pi>=g_pn){ g_pi=g_pn-2; g_pdir=-1; } else if(g_pi<0){ g_pi=1; g_pdir=1; }
+            g_pk=bk; g_ci=-1; g_cj=bk; g_tx=path_x(bk); g_ty=g_path[bk].y+g_poff[bk]; return true;
+        }
+    }
     for(int tries=0;tries<2*g_pn;tries++){
         int k=g_pi; g_pi+=g_pdir; if(g_pi>=g_pn){ g_pi=g_pn-2; g_pdir=-1; } else if(g_pi<0){ g_pi=1; g_pdir=1; }
         if(g_pmiss[k]>=3) continue;                                   // gave up on this spot
-        float x=g_path[k].x, y=g_path[k].y+g_poff[k];
+        float x=path_x(k), y=g_path[k].y+g_poff[k];
         if(exhausted(remainingAt(x,y))) continue;                     // worked out on this side
         g_pk=k; g_ci=-1; g_cj=k; g_tx=x; g_ty=y; return true;
     }
@@ -152,6 +174,14 @@ static bool path_point(){
 }
 static void path_result(bool hit){
     if(g_pk<0) return;
+    if(!g_mirrorDecided[g_side]){                                     // first strokes on a newly flipped side
+        if(hit){ g_mirrorDecided[g_side]=true; logf("flipped side %d: path %s hits",g_side,g_pathMirror[g_side]?"(mirrored)":"(as traced)"); }
+        else if(++g_sideMisses>=2){
+            g_mirrorDecided[g_side]=true; g_pathMirror[g_side]=!g_pathMirror[g_side]; g_sideMisses=0;
+            memset(g_pmiss,0,sizeof g_pmiss); memset(g_poff,0,sizeof g_poff);
+            logf("flipped side %d: path missed twice -> trying it mirrored",g_side); return;
+        }
+    }
     if(hit){ g_pmiss[g_pk]=0; return; }
     int m=++g_pmiss[g_pk]; g_poff[g_pk]= (m==1)? 0.04f : (m==2? -0.04f : 0.f);   // nudge, then give up
 }
@@ -168,6 +198,12 @@ static int sweep_point(){
     float ys[3]; int ny=1;
     if((b.y1-b.y0)>0.05f){ float c=(b.y0+b.y1)*0.5f; ys[0]=c; ys[1]=c-0.12f; ys[2]=c+0.12f; ny=3; } else ys[0]=F<float>(g_m,M_POS+4);
     const int NX=48; bool anyHot=false; float bestR=-1e9f,bx=0,by=0; bool haveBest=false;
+    if(g_fresh>0){                                     // no rhythm yet (just flipped): the freshest hot spot, if fresh enough
+        float fr=FRESH_MIN, fx=0, fy=0; bool ok=false;
+        for(int k=0;k<NX;k++){ float x=lo+(hi-lo)*k/(float)(NX-1); int z=std::min(n-1,std::max(0,(int)(x*n))); if(t[z]<g_strikeMin) continue;
+            for(int j=0;j<ny;j++){ float r=remainingAt(x,ys[j]); if(r>=fr){ fr=r; fx=x; fy=ys[j]; ok=true; } } }
+        if(ok){ g_tx=fx; g_ty=fy; g_lastX=fx; g_ci=-1; g_cj=-1; return 1; }
+    }
     float start=g_lastX<0? lo : g_lastX+0.08f;
     for(int pass=0;pass<2;pass++)                      // pass 0: >=0.08 ahead (wrapping), pass 1: anything
     for(int k=0;k<NX;k++){
@@ -201,8 +237,18 @@ static bool g_flipped=false, g_flipDisabled=false; static int g_zeroStreak=0, g_
 static float g_fireCap=9999.f, g_capRef=0; static uint64_t g_capT=0; static bool g_bel=false;
 static kc::Hotkey g_key; static int g_hits=0,g_miss=0;
 static int g_insane=0; static bool g_dead=false;
+static int g_pass=0, g_passStrokes=0;      // anvil passes this piece, strokes in the current pass
 
-static void setph(Phase p,const char* why){ logf("phase %s -> %s (%s) st=%d comp=%.3f q=%.3f fire=%.0f stam=%.0f",PN[g_ph],PN[p],why,st(),comp(),qual(),fire(),stamina()); g_ph=p; g_phT=GetTickCount64(); g_t=0; }
+static void setph(Phase p,const char* why){ logf("phase %s -> %s (%s) st=%d comp=%.3f q=%.3f fire=%.0f stam=%.0f",PN[g_ph],PN[p],why,st(),comp(),qual(),fire(),stamina()); g_ph=p; g_phT=g_clock(); g_t=0; }
+static void do_flip(const char* why){       // the game's own Flip action (only valid at the idle anvil)
+    g_flipped=true; g_sinceFlip=0; g_zeroStreak=0; g_preAimed=false;
+    act0(A_FLIP); setph(Flip,why);
+}
+static bool planned_flip_due(float c){
+    if(g_flipAtPct<=0 || g_flipped || g_flipDisabled) return false;
+    float at=g_flipAtPct/100.f;
+    return c>=at || (g_pass>=2 && g_passStrokes==0 && c>=at*0.5f);   // a new anvil pass has no rhythm to lose
+}
 static void bellows(bool on){ if(on!=g_bel||F<uint8_t>(g_m,M_BELLOWS)!=(uint8_t)on){ actBellows(on); g_bel=on; } }
 static void stop(const char* why){
     if(g_ph==Idle) return;
@@ -217,18 +263,20 @@ static void start(){
     memset(g_cells,0,sizeof g_cells); g_side=0; g_strokeNo=0; g_hits=g_miss=0; g_flipped=false; g_flipDisabled=false; g_zeroStreak=0; g_sinceFlip=0;
     g_fireCap=9999.f; g_capT=0; g_bel=false; g_sub=Ready; g_rest=false; g_stamMax=std::max(stamina(),60.f); g_strikeMin=800.f; g_sweep=0; g_lastX=-1; g_forced=false; g_wsign=0; g_wsum=0; g_wn=0; g_rMiss=-1e9f; g_rHitMin=1e9f; g_missKnown=false;
     g_path=nullptr; g_pn=0; g_pi=0; g_pdir=1; g_pk=-1; g_preAimed=false; memset(g_pmiss,0,sizeof g_pmiss); memset(g_poff,0,sizeof g_poff);
+    g_fresh=0; g_flips=0; g_afterFlipLog=0; g_sideMisses=0; g_pass=0; g_passStrokes=0;
+    g_pathMirror[0]=g_pathMirror[1]=false; g_mirrorDecided[0]=true; g_mirrorDecided[1]=false;   // side 0 is the traced side
     if(!strcmp(wpid(),"horseshoe")){ g_path=HORSESHOE; g_pn=(int)(sizeof HORSESHOE/sizeof HORSESHOE[0]); logf("using seeded horseshoe path (%d spots)",g_pn); }
     Bounds b=bounds(); g_2d=is2d(b);
     char z[64]; logzones(z,sizeof z);
     logf("START piece=%s zones=[%s] bounds=(%.2f,%.2f)-(%.2f,%.2f) %s st=%d comp=%.3f q=%.3f stam=%.0f",wpid(),z,b.x0,b.y0,b.x1,b.y1,g_2d?"2D":"1D",st(),comp(),qual(),stamina());
     int s=st();
     if(s==ST_FORGE) setph(Heat,"start at forge");
-    else if(s==ST_ANVIL||s==ST_FINISHSTROKE) setph(Work,"start at anvil");
+    else if(s==ST_ANVIL||s==ST_FINISHSTROKE){ g_pass=1; setph(Work,"start at anvil"); }
     else { logf("not at forge/anvil (state %d); F9 when Henry is at the forge",s); g_ph=Idle; }
 }
 
 static void tick(float dt){
-    uint64_t now=GetTickCount64();
+    uint64_t now=g_clock();
     bool pressed=g_key.pressed();
     if(pressed){ if(g_ph==Idle) start(); else stop("user key"); return; }
     if(g_ph==Idle) return;
@@ -267,7 +315,7 @@ static void tick(float dt){
         break;
     }
     case GoAnvil:
-        if(s==ST_ANVIL){ Bounds b=bounds(); g_2d=is2d(b); g_sub=Ready; g_lastStart=0; setph(Work,"at anvil"); }
+        if(s==ST_ANVIL){ Bounds b=bounds(); g_2d=is2d(b); g_sub=Ready; g_lastStart=0; g_pass++; g_passStrokes=0; setph(Work,"at anvil"); }
         else if(s==ST_FORGE && inPh>4000 && !g_t){ act0(A_TOANVIL); g_t=now; logf("retry ToAnvil"); }
         else if(inPh>20000) stop("anvil transition timeout");
         break;
@@ -279,8 +327,15 @@ static void tick(float dt){
     case Flip:
         if(s==ST_FLIP||s==ST_FLIPBACK) g_t=1;
         if(s==ST_ANVIL && (g_t||inPh>1500)){
-            if(!g_t && inPh>1500){ g_flipDisabled=true; logf("flip did nothing -> disabled"); } else { g_side^=1; logf("flipped, side=%d",g_side); }
+            bool turned=g_t!=0;
+            if(!turned){ g_flipDisabled=true; logf("flip did nothing -> disabled"); }
+            else {
+                g_side^=1; g_flips++; g_fresh=RHYTHM_STROKES; g_afterFlipLog=RHYTHM_STROKES+2; g_sideMisses=0;
+                memset(g_pmiss,0,sizeof g_pmiss); memset(g_poff,0,sizeof g_poff);       // the other side is new ground
+                logf("flipped, side=%d (next %d strokes aim at fresh spots)",g_side,RHYTHM_STROKES);
+            }
             g_sub=Ready; g_lastStart=now; setph(Work,"flip done");
+            if(turned && g_2d){ if(!path_point()) choose_point(); g_preAimed=true; aim(); }   // hammer travels during the beat
         } else if(inPh>8000) stop("flip timeout");
         break;
     case Work: {
@@ -299,6 +354,9 @@ static void tick(float dt){
             if(hit){ g_hits++; g_zeroStreak=0; } else { g_miss++; g_zeroStreak++; }
             KC_DLOG("stroke#%d side=%d aim=(%.2f,%.2f) cell=%d,%d %s gain=%.3f comp=%.3f dq=%.4f q=%.3f stam=%.0f(-%.0f) bpm=%.1f charge=%.2f work=%.4f->%.4f zones=[%s]",
                 g_strokeNo,g_side,g_tx,g_ty,g_ci,g_cj,hit?"HIT":"MISS",gain,c,dq,qual(),stam,cost,F<float>(g_m,M_BPM),F<float>(g_m,M_CHARGE),g_w0,w1,z);
+            if(g_afterFlipLog>0){ g_afterFlipLog--;      // always logged: shows what a flip cost
+                logf("after flip: stroke#%d side=%d aim=(%.2f,%.2f) %s work=%.2f charge=%.2f gain=%.3f dq=%.4f q=%.3f bpm=%.1f",
+                    g_strokeNo,g_side,g_tx,g_ty,hit?"HIT":"MISS",g_w0,F<float>(g_m,M_CHARGE),gain,dq,qual(),F<float>(g_m,M_BPM)); }
             if(g_2d) path_result(hit);
             g_sub=Ready; g_sinceFlip++;
             if(g_2d){ if(!path_point()) choose_point(); g_preAimed=true; aim(); }   // move early so the hammer has arrived by the swing
@@ -312,16 +370,21 @@ static void tick(float dt){
             if(stam<STAM_LOW && now-g_lastStart>=STROKE_PERIOD){ g_lastStart+=STROKE_PERIOD; logf("skip beat: stam %.0f",stam); break; }
         }
         if(s==ST_ANVIL && !g_flipDisabled && (g_zeroStreak>=6 && g_sinceFlip>=8)){
-            g_flipped=true; g_zeroStreak=0; g_sinceFlip=0; act0(A_FLIP); g_t=0; setph(Flip, c>=0.5f?"half done":"stalled"); break;
+            do_flip(c>=0.5f?"half done":"stalled"); break;
+        }
+        if(planned_flip_due(c)){                    // turn the piece over once, like a smith would
+            if(s==ST_ANVIL){ do_flip(c>=g_flipAtPct/100.f? "planned: half way" : "planned: new anvil pass"); break; }
+            if(now-g_lastStart<STROKE_PERIOD+1500) break;   // wait for the idle anvil; the flip resets the rhythm anyway
         }
         if(now-g_lastStart<STROKE_PERIOD) break;
         if(!g_2d){ int sp=sweep_point();
             if(sp==0){ if(s!=ST_ANVIL) break; logf("no hot section -> reheat"); act0(A_TOFORGE); setph(GoForge,"reheat"); break; }
             if(sp==2){ if(s!=ST_ANVIL) break;
-                if(!g_flipDisabled && g_sinceFlip>=2){ logf("side worked out -> flip"); g_sinceFlip=0; g_zeroStreak=0; act0(A_FLIP); g_t=0; setph(Flip,"side done"); break; }
+                if(!g_flipDisabled && g_sinceFlip>=2){ logf("side worked out -> flip"); do_flip("side done"); break; }
                 if(!g_forced){ g_forced=true; logf("both sides worked out at every hot spot -> taking best remaining spots"); }
                 if(sweep_point()!=1) break; } }
-        g_strokeNo++; if(g_2d && !g_preAimed){ if(!path_point()) choose_point(); } g_preAimed=false;
+        g_strokeNo++; g_passStrokes++; if(g_2d && !g_preAimed){ if(!path_point()) choose_point(); } g_preAimed=false;
+        if(g_fresh>0) g_fresh--;
         if(g_ci>=0) g_cells[g_side][g_ci][g_2d?g_cj:0].lastUse=g_strokeNo;
         aim();
         g_c0=c; g_q0=qual(); g_s0=stam; g_w0=workAt(g_tx,g_ty);
@@ -367,15 +430,23 @@ extern "C" __declspec(dllexport) int KC_SelfTest(HMODULE game, uintptr_t* out){ 
     uintptr_t* p=(uintptr_t*)&f; for(size_t i=0;i<sizeof f/8;i++) out[i]=p[i];
     return ok? (int)(sizeof f/8) : -R.fails;
 }
+// Offline forge simulator hooks (tools/forgesim.cpp): a fake C_Blacksmithing/model/workpiece in plain memory.
+extern "C" __declspec(dllexport) void KC_SimInit(uintptr_t bs, void* workmap, uint64_t (*clock)(), int flipAt, const char* logPath){
+    g_bs=bs; g_m=F<uintptr_t>(bs,BS_MODEL); pWorkMap=(uintptr_t)workmap; g_clock=clock; g_flipAtPct=flipAt;
+    kc::g_debug=true; if(kc::g_log) fclose(kc::g_log); fopen_s(&kc::g_log,logPath,"w"); g_ph=Idle; g_dead=false;
+}
+extern "C" __declspec(dllexport) void KC_SimStart(){ start(); }
+extern "C" __declspec(dllexport) int KC_SimTick(){ tick(0.02f); return (int)g_ph; }
 #endif
 
 static HMODULE g_self=nullptr;
 static DWORD WINAPI Init(LPVOID){
     kc::init(g_self,"kcd2_autoforge");
     g_key.vk=kc::ini_key("Forge",VK_F9);
+    g_flipAtPct=std::min(95,std::max(0,kc::ini_int("Options","FlipAt",50)));
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v1.0.0 (game ts 0x%08X)",R.im.timestamp);
+    logf("start v1.1.0 (game ts 0x%08X) flip at %d%%",R.im.timestamp,g_flipAtPct);
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pWorkMap=f.workmap;
@@ -385,5 +456,5 @@ static DWORD WINAPI Init(LPVOID){
     char kn[16]; logf("ready (%s at the forge)",kc::key_name(g_key.vk,kn,sizeof kn));
     return 0;
 }
-KC_PLUGIN("Theatrical AutoForge", KC_AUTHOR, 100)
+KC_PLUGIN("Theatrical AutoForge", KC_AUTHOR, 110)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){ if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); } return TRUE; }
