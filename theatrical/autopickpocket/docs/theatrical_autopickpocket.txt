@@ -1,4 +1,4 @@
-THEATRICAL AUTOPICKPOCKET 0.1.0 (test build) - Kingdom Come: Deliverance II
+THEATRICAL AUTOPICKPOCKET 0.2.0 (test build) - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 Henry pickpockets for you, the way a careful thief would, with the game's own controls. You still sneak
@@ -23,16 +23,17 @@ INSTALL
   Uninstall: delete that folder.
 
 HOW TO USE
-  1. Press F5 to switch the mod on (it starts off; a short message confirms it).
+  1. Press [ (left square bracket) to switch the mod on (it starts off; a short message confirms it).
   2. Sneak up behind someone and start pickpocketing as usual. Hold the key.
   3. The mod lets go of the key for you once the ring falls to the safety you chose (ReleaseSafety).
      Letting go yourself earlier works as always.
-  4. In the item grid, keep your hands off the grid keys. The mod picks the most valuable items it has
-     time for, uncovers covered ones when there is time, and leaves through the exit with time to spare.
-  F5 again switches it off. Switching off during the grid hands the grid straight back to you.
+  4. In the item grid, keep your hands off the grid keys. The mod plans the whole round at once: the most
+     valuable set of items it has time for (all of them when they fit), in the shortest sweep around the
+     ring, uncovering covered ones when there is time, then leaves through the exit with time to spare.
+  [ again switches it off. Switching off during the grid hands the grid straight back to you.
 
 SETTINGS  (Mods\theatrical_autopickpocket\KCSE\Plugins\kcd2_autopickpocket.ini)
-  [Keys]    Toggle=F5            on/off key (F1-F12, a letter or digit, or a symbol key such as ])
+  [Keys]    Toggle=[             on/off key (F1-F12, a letter or digit, or a symbol key such as ])
   [Options] Enabled=0            1 = on when the game starts
             Charge=1             1 = let go of the pickpocket key for you
             Grid=1               1 = play the item grid for you
@@ -49,7 +50,7 @@ KNOWN ISSUES AND LIMITATIONS
   - Test build: only checked against the Steam version of the game (build 15693).
   - The mod decides only on what you could see: it does not know what is under a covered item until it
     uncovers it.
-  - Pressing the grid keys yourself while the mod plays the grid confuses it. Press F5 first.
+  - Pressing the grid keys yourself while the mod plays the grid confuses it. Press [ first.
 
 GAME UPDATES
   The mod does not use fixed memory addresses. At startup it finds the game code it needs by pattern and
@@ -68,4 +69,6 @@ LICENSE
   GNU GPL v3 (LICENSE.txt).
 
 CHANGES
+  0.2.0  - Plans the whole route through the grid (no more back-and-forth), takes every item that fits.
+         - Default key is now [ (F5 is a common quicksave key). Symbol keys such as [ ] ; work in the ini.
   0.1.0  - First test build.

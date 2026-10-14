@@ -74,24 +74,38 @@ UI events (registered in Init 0xED1D04):
   [0] and [2], item vtbl[1]; inline (17 / 19 whole-instruction bytes) OnActionHintState and OnClose.
 * Charge: release at `safety <= ReleaseSafety` in state 2 (or after MaxChargeSeconds). No ring value
   seen: release half way between minimum and maximum.
-* Grid: `pp_logic.h` greedy value/time planner with a feasibility check (`travel + cost + way home +
-  SafetyMs`), re-checked every step. Step times start from the nominal speed plus 70 ms and are then
-  measured from accepted/ignored moves. A command counts as accepted only when the movie raises its hint;
-  if hints arrive late, a command waits up to 150 ms and 3 ticks, and a hint that turns up after that is
-  still credited.
+* Grid (0.2.0): `pp_logic.h` plans the whole route: an exact DP over subsets of the candidate tiles
+  (2^11 x 11 states) finds the most valuable set of items (each item also counts +1, so worthless ones
+  are still taken when they fit) and its quickest order, with `travel + item costs + way home <= time
+  left - SafetyMs`. The first tile of that route is the target; it is re-planned after every take or
+  uncover, and checked again on every step. 0.1.0's greedy value/time choice zig-zagged (round 1: 24
+  selector steps for 4 items where 12 do). Step times start from the nominal speed plus 70 ms; a
+  measured step only counts when it is bracketed tightly by a refused and an accepted try and lies near
+  the nominal speed (an overstated sample used to slow the mod down and could cost the exit). A command
+  counts as accepted only when the movie raises its hint; if hints arrive late, a command waits up to
+  150 ms and 3 ticks, and a hint that turns up after that is still credited.
 * Fair mode (default): covered items are unknown until uncovered (their cost and value are estimated
   from what is visible).
 
 ## Simulator (`tools/ppsim.cpp`)
 
-Models the movie above frame by frame. 2000 runs x 3 seeds x 5 variants (60 fps, 60 fps + hitches,
-30 fps + hitches, 45 fps with hints a frame late, 60 fps omniscient): **0 caught**, about 0.95 items and
-19-20 % of all value per grid (27-28 % omniscient), 3.7-3.9 s of budget left on average.
+Models the movie above frame by frame. First the two round 1 grids from the game log (must give 2 items
+with 5.29 s, and all 4 in at most 12 steps with 25.45 s; 0.1.0 needed 24, as in the game), then random
+grids: "game" layouts (3-6 slots/s, up to 30 s) and harder "slow" ones (0.7-2.7 slots/s, 6-16 s), at
+60/30 fps with hitches, with hints a frame late, and omniscient. 0.2.0, 2000 runs x 7 variants x 3
+seeds: **0 caught**; game layouts about 3.2 items and 55 % of all value per grid (70 % omniscient).
+
+## Round 1 in the game (2026-10-14, log in test-results/round1)
+
+* FillUIArgs runs inside Open: `items_described=4`, names and prices known.
+* Hints arrive during our CallFunction call, except sometimes the first command of a grid (one frame
+  later, 17 ms); the pending logic covers that. 0 ignored commands in both grids.
+* The boost grows fast (about 5 s of budget after 0.8 s of holding; 25 s after 3.5 s); the ring was still
+  at 0.94 and 0.59 when Evan let go himself, so the mod's own release (0.35) never fired yet.
+* Selector 5 slots/s without the perk; max budget 30 s.
 
 ## Open questions for the test session
 
-* Is FillUIArgs called inside Open (prices known) or later (prices unknown -> value-blind but safe)?
-  The log line `grid_start items_described=N` answers it.
-* Are hints raised during our CallFunction (sync) as expected? `DebugLog=1` shows `hint ...` lines
-  between `send ...` lines.
+* Hold the key until the mod lets go: `charge_release safety=...` in the log (does the ring reach 0.35
+  before the game's own maximum opens the grid?).
 * Real selector step time vs nominal: logged as `selector step measured`.

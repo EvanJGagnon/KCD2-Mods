@@ -54,6 +54,10 @@ inline int ini_key(const char* key, int def) {
     if ((s[0] == 'F' || s[0] == 'f') && s[1] >= '1' && s[1] <= '9') { int n = atoi(s + 1); if (n >= 1 && n <= 24) return VK_F1 + n - 1; }
     if (!s[1] && ((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= '0' && s[0] <= '9'))) return s[0];
     if (!s[1] && s[0] >= 'a' && s[0] <= 'z') return s[0] - 32;
+    if (!s[1] && s[0] > ' ' && s[0] < 127) {               // a symbol key such as [ ] ; ' , . / \ - = `
+        SHORT k = VkKeyScanA(s[0]);                          // on the current keyboard layout
+        if (k != -1 && !(k & 0x0600)) return k & 0xFF;     // reachable without Ctrl/Alt (Shift is ignored)
+    }
     int n = (int)strtol(s, nullptr, 0); return (n > 0 && n < 256) ? n : def;
 }
 inline int ini_int(const char* sec, const char* key, int def) {
@@ -63,6 +67,7 @@ inline int ini_int(const char* sec, const char* key, int def) {
 inline const char* key_name(int vk, char* buf, size_t cap) {
     if (vk >= VK_F1 && vk <= VK_F24) sprintf_s(buf, cap, "F%d", vk - VK_F1 + 1);
     else if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9')) sprintf_s(buf, cap, "%c", vk);
+    else if (UINT c = MapVirtualKeyA((UINT)vk, MAPVK_VK_TO_CHAR) & 0x7FFF) sprintf_s(buf, cap, "%c", (char)c);
     else sprintf_s(buf, cap, "VK 0x%02X", vk);
     return buf;
 }

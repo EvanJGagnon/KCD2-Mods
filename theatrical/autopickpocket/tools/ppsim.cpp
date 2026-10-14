@@ -116,19 +116,26 @@ struct Flash {                                            // the UI side, one mo
 static bool g_verbose = false; static int g_only = -1;
 static void logsink(const char* s) { if (g_verbose) printf("    %s\n", s); }
 
-struct Result { bool caught; int taken; float value, possible; double left; };
 
-static Result run(std::mt19937& rng, const Config& cfg, bool verbose, double fps, bool hitches, bool asyncHints) {
+// Grid layouts. "slow": slow selector and short budgets (hard). "game": what round 1 showed in the game
+// (5 slots/s, up to 30 s; the budget is the charge time).
+static Grid random_grid(std::mt19937& rng, bool game, float& possible) {
     std::uniform_real_distribution<double> U(0, 1);
     Grid g;
-    g.selectorSpeed = (float)(0.7 + 2.0 * U(rng));
-    g.maxTimeSec = (float)(6 + 10 * U(rng));
-    g.timeSec = (float)(g.maxTimeSec * (0.3 + 0.7 * U(rng)));
+    if (game) {
+        g.selectorSpeed = (float)(3.0 + 3.0 * U(rng));
+        g.maxTimeSec = (float)(15 + 15 * U(rng));
+        g.timeSec = (float)(g.maxTimeSec * (0.1 + 0.9 * U(rng)));
+    } else {
+        g.selectorSpeed = (float)(0.7 + 2.0 * U(rng));
+        g.maxTimeSec = (float)(6 + 10 * U(rng));
+        g.timeSec = (float)(g.maxTimeSec * (0.3 + 0.7 * U(rng)));
+    }
     g.easyWayOut = U(rng) < 0.4;
     int n = 2 + (int)(9 * U(rng)), vis = (int)(n * U(rng));
     std::vector<int> slots; for (int s = 1; s < NSLOT; s++) slots.push_back(s);
     std::shuffle(slots.begin(), slots.end(), rng);
-    float possible = 0;
+    possible = 0;
     for (int k = 0; k < n; k++) {
         Item& it = g.slot[slots[k]]; it.present = true; it.uncovered = k < vis;
         it.weight = (float)(U(rng) < 0.3 ? 0.1 : 3 * U(rng) * U(rng));
@@ -137,6 +144,12 @@ static Result run(std::mt19937& rng, const Config& cfg, bool verbose, double fps
         it.count = 1; snprintf(it.name, sizeof it.name, "item%d", slots[k]);
         possible += it.price;
     }
+    return g;
+}
+
+struct Result { bool caught; int taken, moves; float value, possible; double left; };
+static Result run_grid(std::mt19937& rng, const Grid& g, float possible, const Config& cfg, bool verbose, double fps, bool hitches, bool asyncHints) {
+    std::uniform_real_distribution<double> U(0, 1);
     Flash f; std::vector<Hint> hints; f.sink = &hints;
     Controller c; c.cfg = cfg; c.log = verbose ? logsink : nullptr; c.closeAck = !asyncHints;
     double now = 1000; f.open(g, now); c.start(g, (uint64_t)now);
@@ -166,33 +179,61 @@ static Result run(std::mt19937& rng, const Config& cfg, bool verbose, double fps
         else for (auto& h : hints) late.push_back({now + dt * 0.5, h});
         hints.clear();
     }
-    Result r{!f.result, c.taken, c.value, possible, f.m_time - (now - f.origin)};
+    Result r{!f.result, c.taken, c.moves, c.value, possible, f.m_time - (now - f.origin)};
     if (verbose) { printf("  flash: queue="); for (int x : f.q) printf("%d ", x); printf("rot=%.1f dir=%d model pos=%d\n", f.rot, f.dir, c.pos); }
     if (verbose) printf("  -> %s taken=%d value=%.1f/%.1f left=%.0fms\n", f.result ? "success" : "CAUGHT", c.taken, c.value, possible, r.left);
     return r;
 }
 
+// Round 1 grids from the game log (2026-10-14): what they must give.
+static Grid logged_grid(int which) {
+    Grid g; g.selectorSpeed = 5; g.maxTimeSec = 30; g.easyWayOut = false;
+    struct { int slot; float price; const char* name; } a[] = {{1, 35, "potion"}, {4, 19.5f, "money"}, {6, 0, "keyring"}, {10, 7.3f, "cheese"}},
+                                                          b[] = {{2, 0.5f, "beer"}, {5, 20.8f, "money"}, {6, 0, "keyring"}, {9, 1.9f, "breadroll"}};
+    g.timeSec = which ? 25.45f : 5.29f;
+    for (auto& x : which ? b : a) { Item& it = g.slot[x.slot]; it.present = it.uncovered = true; it.price = x.price; it.count = 1; snprintf(it.name, sizeof it.name, "%s", x.name); }
+    return g;
+}
+static int regress() {
+    int bad = 0; Config cfg;
+    for (int w = 0; w < 2; w++) for (double fps : {60.0, 30.0}) {
+        std::mt19937 rng(5 + w);
+        Grid g = logged_grid(w); float possible = 0; for (auto& it : g.slot) if (it.present) possible += it.price;
+        Result r = run_grid(rng, g, possible, cfg, g_verbose, fps, false, false);
+        // grid 1 (5.29 s): the first take may not be lost to wandering; grid 2 (25.45 s): all four in one sweep
+        bool ok = !r.caught && (w ? (r.taken == 4 && r.moves <= 12) : (r.taken >= 2 && r.value >= 42));
+        printf("regression grid %d @%.0ffps: %s taken=%d value=%.1f moves=%d left=%.1fs\n", w + 1, fps, ok ? "ok" : "FAIL", r.taken, r.value, r.moves, r.left / 1000);
+        bad += !ok;
+    }
+    return bad;
+}
+
 int main(int argc, char** argv) {
     int runs = argc > 1 ? atoi(argv[1]) : 2000; unsigned seed = argc > 2 ? (unsigned)atoi(argv[2]) : 1;
     for (int i = 1; i < argc; i++) { if (!strcmp(argv[i], "-v")) g_verbose = true; if (!strncmp(argv[i], "-run=", 5)) { g_verbose = true; g_only = atoi(argv[i] + 5); } }
-    struct Variant { const char* name; double fps; bool hitches, async, fair; } vs[] = {
-        {"60fps", 60, false, false, true}, {"60fps+hitches", 60, true, false, true}, {"30fps+hitches", 30, true, false, true},
-        {"45fps async-hints", 45, true, true, true}, {"60fps omniscient", 60, false, false, false},
+    int bad = regress();
+    struct Variant { const char* name; double fps; bool hitches, async, fair, game; } vs[] = {
+        {"game 60fps", 60, false, false, true, true}, {"game 30fps+hitches", 30, true, false, true, true},
+        {"game 45fps async", 45, true, true, true, true}, {"game omniscient", 60, false, false, false, true},
+        {"slow 60fps+hitches", 60, true, false, true, false}, {"slow 30fps+hitches", 30, true, false, true, false},
+        {"slow 45fps async", 45, true, true, true, false},
     };
-    int bad = 0;
     for (auto& v : vs) {
         std::mt19937 rng(seed);
         Config cfg; cfg.fair = v.fair;
-        int caught = 0, taken = 0; double value = 0, possible = 0, left = 0;
+        int caught = 0, taken = 0, all = 0, allPossible = 0; double value = 0, possible = 0, left = 0, moves = 0;
         for (int k = 0; k < runs; k++) {
             bool verbose = g_verbose && (k < 3 || k == g_only);
             if (verbose) printf("[%s run %d]\n", v.name, k);
-            Result r = run(rng, cfg, verbose, v.fps, v.hitches, v.async);
+            float pos = 0; Grid g = random_grid(rng, v.game, pos);
+            int n = 0; for (auto& it : g.slot) n += it.present;
+            Result r = run_grid(rng, g, pos, cfg, verbose, v.fps, v.hitches, v.async);
             if (r.caught && !g_verbose) printf("  caught: %s run %d\n", v.name, k);
-            caught += r.caught; taken += r.taken; value += r.value; possible += r.possible; left += r.left;
+            caught += r.caught; taken += r.taken; value += r.value; possible += r.possible; left += r.left; moves += r.moves;
+            all += r.taken == n; allPossible++;
         }
-        printf("%-20s runs=%d caught=%d items/run=%.2f value=%.1f%% of all  budget left avg=%.2fs\n",
-               v.name, runs, caught, (double)taken / runs, 100 * value / possible, left / runs / 1000);
+        printf("%-20s runs=%d caught=%d items/run=%.2f all-taken=%.0f%% value=%.1f%% moves/run=%.1f budget left avg=%.2fs\n",
+               v.name, runs, caught, (double)taken / runs, 100.0 * all / allPossible, 100 * value / possible, moves / runs, left / runs / 1000);
         bad += caught;
     }
     return bad ? 1 : 0;

@@ -22,7 +22,7 @@
 //   C_UIFlashBase::CallFunction(ui, name)               - (called) how the game sends a key to the grid
 //   charge action functor                               - (called) how the game releases the charge key
 //
-// Use: off by default; F5 (kcd2_autopickpocket.ini) switches it on and off at any time. While it plays the
+// Use: off by default; [ (Toggle= in kcd2_autopickpocket.ini) switches it on and off at any time. While it plays the
 // grid keep your hands off the grid keys (switching it off hands the grid back to you at once).
 // Log: kcd2_autopickpocket.log next to the DLL.
 #include "kcd2_common.h"
@@ -30,7 +30,7 @@
 
 using kc::logf;
 
-#define VERSION "0.1.0"
+#define VERSION "0.2.0"
 
 // ---------------- signatures (build 15693 RVAs in comments) ----------------
 // C_Pickpocketing::Update: mov ecx,[rcx+78h] (state) right after the stack cookie                 0x2EB3B34
@@ -385,7 +385,7 @@ static float ini_float(const char* key, float def) {
     return v[0] ? (float)atof(v) : def;
 }
 static void load_settings() {
-    g_key.vk = kc::ini_key("Toggle", VK_F5);
+    g_key.vk = kc::ini_key("Toggle", VK_OEM_4);   // [ on a US layout
     g_on = kc::ini_int("Options", "Enabled", 0) != 0;
     g_notices = kc::ini_int("Options", "Notices", 1) != 0;
     g_charge = kc::ini_int("Options", "Charge", 1) != 0;

@@ -116,7 +116,7 @@ struct Controller {
     // Selector step time: the UI's nominal speed until steps have been timed (the UI turns the selector in
     // whole half-degree frame steps, so the real speed depends on the frame rate and rounding).
     double measured[2] = {0, 0}; int nMeasured[2] = {0, 0};
-    uint64_t lastMoveAt = 0; int lastMoveDir = 0; bool retriedSinceMove = false;
+    uint64_t lastMoveAt = 0, lastRejectAt = 0; int lastMoveDir = 0; bool retriedSinceMove = false;
     double slotMs() const { return 1000.0 / (g.selectorSpeed > 0.05f ? g.selectorSpeed : 0.05f); }
     bool fastStep(int s, int d) const { return g.easyWayOut && ((d > 0 && s >= 6) || (d < 0 && s <= 6) || (d < 0 && s == EXIT)); }
     // One step from slot s in direction d (Easy Way Out doubles the speed towards the exit).
@@ -169,32 +169,57 @@ struct Controller {
         }
     }
 
-    // Pick what to do next from the slot the selector rests on.
+    // Pick what to do next from the slot the selector rests on: the best whole route, not the best next item.
+    // Every route (any subset of the candidate tiles, in any order, then the exit) is scored by an exact DP over
+    // subsets: most value first (each item also counts a little, so worthless items are still taken when they
+    // fit), then least time. A route only counts if  travel + item costs + way home <= time left - SafetyMs.
+    // Its first tile becomes the target; the route is planned again after every take or uncover.
+    struct Node { int slot, goal; double cost, value; };
+    int routeLen = 0, route[NSLOT] = {0};
     void plan(uint64_t now) {
         double rem = remainingMs(now) - cfg.safetyMs;
-        int best = -1, bestGoal = 0; double bestScore = -1;
+        Node n[NSLOT]; int k = 0;
         for (int s = 1; s < NSLOT; s++) {
-            double tr = travel(pos, s), back = homeMs(s);
-            if (st[s] == S_PERM) {
+            if (st[s] == S_PERM || st[s] == S_UNCOVER) {
                 if (valueOf(s) < cfg.minValue) continue;
-                double need = tr + costMs(g.slot[s]) + back;
-                if (need > rem) continue;
-                double score = (valueOf(s) + 0.01) / (tr + costMs(g.slot[s]));
-                if (score > bestScore) { bestScore = score; best = s; bestGoal = 1; }
+                n[k++] = Node{s, 1, costMs(g.slot[s]), valueOf(s)};
             } else if ((st[s] == S_HIDDEN || st[s] == S_COVERING) && cfg.uncover) {
-                bool k = known(s);
-                if (k && valueOf(s) < cfg.minValue) continue;
-                double cost = k ? costMs(g.slot[s]) : expectedCost();
-                double val = k ? valueOf(s) : expectedValue() * 0.7;
+                bool kn = known(s);
+                if (kn && valueOf(s) < cfg.minValue) continue;
                 double wait = (st[s] == S_COVERING ? 1000.0 : 0.0) + 1000.0 + 2 * cfg.lagPerSlotMs;
-                double need = tr + wait + cost + back;
-                if (need > rem) continue;
-                double score = (val + 0.01) / (tr + wait + cost);
-                if (score > bestScore) { bestScore = score; best = s; bestGoal = 2; }
+                n[k++] = Node{s, 2, wait + (kn ? costMs(g.slot[s]) : expectedCost()), kn ? valueOf(s) : expectedValue() * 0.7};
             }
         }
-        if (best < 0) { target = EXIT; goal = 3; logf("plan: home (%.1fs left, %.1fs to the exit)", remainingMs(now) / 1000, homeMs(pos) / 1000); }
-        else { target = best; goal = bestGoal; logf("plan: %s slot %d (%s) %.1fs left", goal == 1 ? "take" : "uncover", best, g.slot[best].name, remainingMs(now) / 1000); }
+        const double INF = 1e18; const int M = 1 << k;
+        static double T[1 << (NSLOT - 1)][NSLOT - 1];     // least time to cover mask, ending at node j (holding j's cost)
+        static signed char P[1 << (NSLOT - 1)][NSLOT - 1];
+        for (int m = 0; m < M; m++) for (int j = 0; j < k; j++) T[m][j] = INF;
+        for (int j = 0; j < k; j++) { T[1 << j][j] = travel(pos, n[j].slot) + n[j].cost; P[1 << j][j] = -1; }
+        int bestM = 0, bestJ = -1; double bestV = 0, bestT = homeMs(pos);
+        for (int m = 1; m < M; m++) {
+            double v = 0; for (int j = 0; j < k; j++) if (m >> j & 1) v += n[j].value + 1.0;
+            for (int j = 0; j < k; j++) {
+                double t = T[m][j]; if (t >= INF) continue;
+                double total = t + homeMs(n[j].slot);
+                if (total > rem) continue;                  // ends too late: no extension can fit either (times only grow)
+                if (v > bestV + 1e-6 || (fabs(v - bestV) <= 1e-6 && total < bestT)) { bestV = v; bestT = total; bestM = m; bestJ = j; }
+                for (int i = 0; i < k; i++) if (!(m >> i & 1)) {
+                    double t2 = t + travel(n[j].slot, n[i].slot) + n[i].cost;
+                    int m2 = m | 1 << i;
+                    if (t2 < T[m2][i]) { T[m2][i] = t2; P[m2][i] = (signed char)j; }
+                }
+            }
+        }
+        routeLen = 0;
+        for (int m = bestM, j = bestJ; j >= 0; ) { route[routeLen++] = j; int pj = P[m][j]; m &= ~(1 << j); j = pj; }
+        for (int a = 0, b = routeLen - 1; a < b; a++, b--) { int t = route[a]; route[a] = route[b]; route[b] = t; }
+        if (!routeLen) { target = EXIT; goal = 3; logf("plan: home (%.1fs left, %.1fs to the exit)", remainingMs(now) / 1000, homeMs(pos) / 1000); return; }
+        char buf[96]; int o = 0;
+        for (int r = 0; r < routeLen && o < 80; r++) o += snprintf(buf + o, sizeof buf - o, "%s%d", n[route[r]].goal == 2 ? "?" : "", n[route[r]].slot);
+        const Node& f = n[route[0]]; target = f.slot; goal = f.goal;
+        logf("plan: %s slot %d (%s) %.1fs left; route %s->exit, %.1fs of %.1fs", goal == 1 ? "take" : "uncover", target, g.slot[target].name,
+             remainingMs(now) / 1000, buf, bestT / 1000, (rem + cfg.safetyMs) / 1000);
+        for (int r = 0; r < routeLen; r++) route[r] = n[route[r]].slot;
     }
 
     // Covered/uncovered timing of tiles the selector has left, as the UI animates them.
@@ -313,25 +338,31 @@ struct Controller {
     bool pending(uint64_t now) {                       // step(): still waiting for a late hint?
         if (pendCmd == C_NONE) return false;
         if (++pendTicks < pendingTicks || now - pendAt < (uint64_t)pendingMs) return true;
-        int c = pendCmd; pendCmd = C_NONE; lateCmd = c; lateAt = pendAt; logf("no hint %.0fms after the command - treated as ignored", (double)(now - pendAt)); reject(c, now); return false;
+        int c = pendCmd; pendCmd = C_NONE; lateCmd = c; lateAt = pendAt; logf("no hint %.0fms after the command - treated as ignored", (double)(now - pendAt)); reject(c, now, pendAt); return false;
     }
-    void reject(int cmd, uint64_t now) {
+    void reject(int cmd, uint64_t now, uint64_t sentAt = 0) {
         rejected++; nextTry = now + (sync ? 16 : 40);
-        if (cmd == C_LEFT || cmd == C_RIGHT) retriedSinceMove = true;
+        if (cmd == C_LEFT || cmd == C_RIGHT) { retriedSinceMove = true; lastRejectAt = sentAt ? sentAt : now; }
     }
     void accept(int cmd, bool mv, bool un, bool tk, uint64_t at, uint64_t now) {
         if (mv) {
             int d = cmd == C_RIGHT ? 1 : -1;
-            // the previous step, timed: accepted right after one that was refused (still turning)
-            if (lastMoveDir == d && retriedSinceMove && lastMoveAt) {
+            // The previous step, timed: it ended between the last refused try and this accepted one. Only a
+            // tight bracket counts (a hitch or a slow retry would overstate it), and a sample far from the
+            // nominal speed is dropped rather than trusted: an overstated step slows the mod down for nothing.
+            if (lastMoveDir == d && retriedSinceMove && lastMoveAt && lastRejectAt > lastMoveAt && at >= lastRejectAt && at - lastRejectAt <= 60) {
                 int f = fastStep((pos - d + NSLOT) % NSLOT, d) ? 1 : 0;
-                double smp = (double)(at - lastMoveAt);
-                measured[f] = nMeasured[f] ? 0.6 * measured[f] + 0.4 * fmax(smp, measured[f] * 0.9) : smp;
-                if (!nMeasured[f]++) logf("selector step measured: %.0fms%s (nominal %.0fms)", smp, f ? " towards the exit" : "", slotMs() * (f ? 0.5 : 1.0));
+                double nom = slotMs() * (f ? 0.5 : 1.0);
+                double smp = 0.5 * (double)(lastRejectAt - lastMoveAt) + 0.5 * (double)(at - lastMoveAt);
+                if (smp >= nom * 0.6 && smp <= nom * 1.6 + 60) {
+                    measured[f] = nMeasured[f] ? 0.7 * measured[f] + 0.3 * smp : smp;
+                    if (!nMeasured[f]++) logf("selector step measured: %.0fms%s (nominal %.0fms)", smp, f ? " towards the exit" : "", nom);
+                }
             }
             double ms = stepMs(pos, d); pos = (pos + d + NSLOT) % NSLOT; moves++;
+            double nomStep = slotMs() * (fastStep((pos - d + NSLOT) % NSLOT, d) ? 0.5 : 1.0);
             lastMoveAt = at; lastMoveDir = d; retriedSinceMove = false;
-            nextTry = at + (uint64_t)(ms * (sync ? 0.7 : 0.95)); arriveAt = at + (uint64_t)ms;
+            nextTry = at + (uint64_t)(fmin(ms, nomStep) * (sync ? 0.7 : 0.9)); arriveAt = at + (uint64_t)ms;   // early retries are harmless
             return;
         }
         if (un) { st[pos] = S_UNCOVERING; stateAt[pos] = at; uncovers++; logf("slot %d: uncovering", pos); return; }

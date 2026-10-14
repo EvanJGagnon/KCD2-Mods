@@ -6,11 +6,11 @@ R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 LICENSE = os.path.join(R, '..', '..', 'LICENSE')     # the repository's GPL v3
 AUTHOR = 'Flubbermunchkin'
 MOD = dict(folder='theatrical_autopickpocket', title='Theatrical AutoPickpocket', zip='TheatricalAutoPickpocket', dll='kcd2_autopickpocket.dll',
-           ver='0.1.0', readme='theatrical_autopickpocket',
-           desc="Henry pickpockets with the game's own inputs: lets go of the charge at a safe moment and plays the item grid, keeping every risk. F5 toggles.",
+           ver='0.2.0', readme='theatrical_autopickpocket',
+           desc="Henry pickpockets with the game's own inputs: lets go of the charge at a safe moment and plays the item grid, keeping every risk. [ toggles.",
            text=[('tap_on', 'AutoPickpocket: on'), ('tap_off', 'AutoPickpocket: off (you pickpocket yourself)')],
            ini='[Keys]\n'
-               '; key: F1-F12, a letter or digit, or a symbol key such as ]\nToggle=F5\n\n'
+               '; key: F1-F12, a letter or digit, or a symbol key such as ]\nToggle=[\n\n'
                '[Options]\n'
                '; 1 = on when the game starts (the key switches it at any time)\nEnabled=0\n'
                '; 1 = let go of the pickpocket key for you when the safety ring falls to ReleaseSafety\nCharge=1\n'
