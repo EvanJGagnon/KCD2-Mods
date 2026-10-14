@@ -145,6 +145,9 @@ static Phase g_ph = IDLE;
 static uint64_t g_at = 0, g_since = 0;
 static uintptr_t g_dice = 0, g_waitState = 0;
 static dice::Decision g_plan;
+static std::vector<dice::Die> g_lookTable;  // the dice the plan was made for
+static uintptr_t g_logState = 0; static int g_logInput = -1;
+static uintptr_t g_base = 0;
 static std::vector<int> g_wantIds;         // die ids to be held
 static int g_holdTries = 0, g_throws = 0, g_turns = 0, g_lastTotal = 0;
 static std::mt19937 g_rng(GetTickCount());
@@ -164,6 +167,17 @@ static void tick(uintptr_t dice) {
     Snap s;
     if (!snap(dice, s)) { if (g_ph != IDLE) KC_DLOG("dice table not readable right now - waiting"); g_ph = IDLE; return; }
 
+    {   // trace for the first test session: every state change with the dice as the game holds them
+        uintptr_t sv = F<uintptr_t>(s.state, 0); int in = F<int>(dice, D_INPUT);
+        if (sv != g_logState || in != g_logInput) {
+            g_logState = sv; g_logInput = in;
+            char fs0[64]; faces_str(s, fs0, sizeof fs0);
+            uintptr_t a0 = F<uintptr_t>(s.pm, 0x168), a1 = F<uintptr_t>(s.pm, 0x170);
+            KC_DLOG("state vtbl +0x%llX input %d player %s turn-state %d | table [%s] | 2nd vector %lld | turn %d total %d opp %d",
+                    (unsigned long long)(sv - g_base), in, F<uintptr_t>(s.state, S_PLAYER) == s.pm ? "Henry" : "other", (int)s.turn, fs0,
+                    (a1 >= a0 && a1 - a0 < 0x200) ? (long long)((a1 - a0) / 16) : -1LL, s.turnPts, s.total, s.oppTotal);
+        }
+    }
     if (!s.turn) {                                          // opponent's turn, dice rolling, scoring, badges...
         if (s.total != g_lastTotal) { logf("score: Henry %d, opponent %d (target %d)", s.total, s.oppTotal, s.target); g_lastTotal = s.total; }
         if ((g_ph == THINK || g_ph == HOLD || g_ph == CHECK) && now - g_since < 4000) return;   // e.g. a die being picked up
@@ -186,8 +200,8 @@ static void tick(uintptr_t dice) {
         if (g_job == 1) return;
         dice::Context cx; cx.total = s.total; cx.opp = s.oppTotal; cx.target = s.target > 0 ? s.target : 4000; cx.risk = g_risk;
         logf("throw: [%s]  turn %d, total %d, opponent %d, target %d", fs, s.turnPts, s.total, s.oppTotal, cx.target);
-        std::vector<dice::Die> tbl = s.table;
-        g_job = 1; think(cx, tbl, s.oppDice, s.turnPts);
+        g_lookTable = s.table;
+        g_job = 1; think(cx, g_lookTable, s.oppDice, s.turnPts);
         enter(THINK, 0);
         return;
     }
@@ -196,9 +210,9 @@ static void tick(uintptr_t dice) {
         g_job = 0;
         { std::lock_guard<std::mutex> l(g_mx); g_plan = g_result; }
         if (g_plan.bust) { logf("nothing scores - waiting for the game to call the bust"); g_waitState = s.state; enter(WAIT, 0); return; }
-        g_wantIds.clear(); for (int i : g_plan.hold) g_wantIds.push_back(s.table[i].id);
+        g_wantIds.clear(); for (int i : g_plan.hold) g_wantIds.push_back(g_lookTable[i].id);
         char hs[64]; size_t k = 0; hs[0] = 0;
-        for (int i : g_plan.hold) k += sprintf_s(hs + k, sizeof hs - k, "%s%s", k ? " " : "", s.table[i].face == dice::JOKER ? "J" : std::to_string(s.table[i].face + 1).c_str());
+        for (int i : g_plan.hold) k += sprintf_s(hs + k, sizeof hs - k, "%s%s", k ? " " : "", g_lookTable[i].face == dice::JOKER ? "J" : std::to_string(g_lookTable[i].face + 1).c_str());
         logf("plan: set aside [%s] for %d, then %s  (pass %.0f / throw on %.0f)", hs, g_plan.score, g_plan.pass ? "PASS" : "THROW AGAIN", g_plan.passValue, g_plan.throwValue);
         g_holdTries = 0;
         enter(HOLD, pause_ms(300, 600));
@@ -289,7 +303,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_speed = std::min(4.0, std::max(0.25, kc::ini_int("Options", "SpeedPercent", 100) / 100.0));
     g_risk = std::min(2.0, std::max(0.5, kc::ini_int("Options", "RiskPercent", 100) / 100.0));
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
-    kc::Resolver R; R.im.load(h);
+    kc::Resolver R; R.im.load(h); g_base = R.im.base;
     logf("start v0.1.0 (game ts 0x%08X)", R.im.timestamp);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
