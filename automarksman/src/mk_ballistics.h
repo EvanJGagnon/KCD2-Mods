@@ -194,12 +194,12 @@ struct BowSpeed {
         for (int i = 0; i < n; i++)
             if (std::fabs(hold[i] - h) < kNear && std::fabs(speed[i] - s) > kChange * speed[i]) changed = true;
         if (changed) n = 0;
-        int near = -1;
-        for (int i = 0; i < n; i++) if (std::fabs(hold[i] - h) < 0.12f && (near < 0 || std::fabs(hold[i] - h) < std::fabs(hold[near] - h))) near = i;
-        if (near < 0 && n == N) {    // full: merge into the closest point
-            near = 0; for (int i = 1; i < n; i++) if (std::fabs(hold[i] - h) < std::fabs(hold[near] - h)) near = i;
+        int nearest = -1;
+        for (int i = 0; i < n; i++) if (std::fabs(hold[i] - h) < 0.12f && (nearest < 0 || std::fabs(hold[i] - h) < std::fabs(hold[nearest] - h))) nearest = i;
+        if (nearest < 0 && n == N) {    // full: merge into the closest point
+            nearest = 0; for (int i = 1; i < n; i++) if (std::fabs(hold[i] - h) < std::fabs(hold[nearest] - h)) nearest = i;
         }
-        if (near >= 0) { speed[near] = 0.5f * (speed[near] + s); return changed; }
+        if (nearest >= 0) { speed[nearest] = 0.5f * (speed[nearest] + s); return changed; }
         int k = n++;
         while (k > 0 && hold[k - 1] > h) { hold[k] = hold[k - 1]; speed[k] = speed[k - 1]; k--; }
         hold[k] = h; speed[k] = s;
