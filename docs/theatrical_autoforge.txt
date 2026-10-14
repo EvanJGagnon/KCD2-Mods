@@ -62,9 +62,10 @@ BUG REPORTS
 CHANGES
   1.1.2  - Fixed: the last stroke sometimes did not finish the piece (completion showed 99.9%
            and the mod waited instead of striking once more).
-         - Fixed: on axes and other 2D pieces, fewer sparkless duds - worked-out spots are
-           skipped, and after the flip Henry starts on spots that hit whichever way the
-           piece turned over. Fewer duds also means fewer extra trips back to the fire.
+         - Fixed: on axes and other 2D pieces, fewer sparkless duds - worn-out spots are
+           skipped, and a turned-over piece is treated as lying mirrored (the axe head faces
+           the other way), so Henry starts the new side on the spots that worked on the first
+           side. Horseshoes too. Fewer duds also means fewer extra trips back to the fire.
          - New "NoFlip" download: the same mod with FlipAt=0.
   1.1.1  - The key setting now accepts symbol keys such as ] or [; a key value the mod
            does not understand is reported in the log instead of silently using the default.

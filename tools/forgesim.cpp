@@ -60,9 +60,11 @@ static float seg_d(P2 a, P2 b, float x, float y) {
 }
 static bool on_piece(float x, float y) {
     if (g_1d) return true;
-    if (g_side == 1 && g_mirror1) x = 0.84f - x;
+    bool shoe = !strcmp(g_piece, "horseshoe");
+    if (g_side == 1 && g_mirror1) x = shoe ? 0.84f - x : 1.f - x;      // turned over: mirrored left-right (shoe trace spans 0.02..0.82)
     if (!strcmp(g_piece, "horseshoe")) { float d = 9; for (int i = 0; i + 1 < (int)(sizeof SHOE / sizeof SHOE[0]); i++) d = std::min(d, seg_d(SHOE[i], SHOE[i + 1], x, y)); return d < 0.055f; }
-    float cy = g_side ? 0.55f : 0.45f; float ex = (x - 0.5f) / 0.33f, ey = (y - cy) / 0.28f; return ex * ex + ey * ey < 1.f;   // axe head
+    // axe head: off-centre (blade side to the right) and tapering, so a mirrored side really differs
+    float ex = (x - 0.58f) / 0.30f, ey = (y - 0.45f) / (0.18f + 0.14f * std::max(0.f, std::min(1.f, (x - 0.28f) / 0.6f))); return ex * ex + ey * ey < 1.f;
 }
 static float workmap(void* /*wp+0x40*/, const float* p) { return g_map[g_side][cxi(p[0])][cyi(g_1d ? 0.f : p[1])]; }
 

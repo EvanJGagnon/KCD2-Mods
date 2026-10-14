@@ -119,6 +119,10 @@ static int g_flips=0, g_afterFlipLog=0;
 #define KC_EXPLORE 0.1f
 #endif
 static const float EXPLORE_KNOWN=KC_EXPLORE;
+#ifndef KC_WPREF
+#define KC_WPREF 1.f
+#endif
+static const float W_PREF=KC_WPREF;               // weight of fresh metal when picking a known spot (fresh metal is near the edges: riskier)
 static void choose_point(){
     Bounds b=bounds(); int ny=g_2d?GY:1;
     auto& C=g_cells[g_side];
@@ -135,7 +139,9 @@ static void choose_point(){
         float w=remainingAt(x,y);
         if(c.hit>0 && exhausted(w)) continue;                               // worked out on this side: a dud, not a hit
         if(g_fresh>0 && c.hit>0){ s=w*10.f; }                               // no rhythm yet (just flipped): freshest known spot
-        else if(!explore){ if(c.hit==0) continue; s=(c.hit+1.f)/(c.hit+c.miss+2.f)*10.f+(g_strokeNo-c.lastUse)*0.1f+w*4.f; }
+        else if(!explore){ if(c.hit==0) continue;
+            if(c.miss>=2 && c.miss*2>c.hit) continue;                       // an edge spot: misses too often
+            s=(c.hit+1.f)/(c.hit+c.miss*3.f+2.f)*10.f+std::min(1.f,(g_strokeNo-c.lastUse)*0.1f)+W_PREF*w; }
         else if(c.hit==0 && c.miss==0){
             // unknown cell: prefer ones next to known hits, else near the piece centre
             float nb=0; for(int di=-1;di<=1;di++) for(int dj=-1;dj<=1;dj++){ int a=i+di,bb=j+dj; if(a>=0&&a<GX&&bb>=0&&bb<ny&&C[a][bb].hit>0) nb+=1; }
@@ -149,7 +155,8 @@ static void choose_point(){
     }
     if(bi<0){ g_ci=g_cj=-1; g_tx=(b.x0+b.x1)*0.5f; g_ty=(b.y0+b.y1)*0.5f; return; }
     g_ci=bi; g_cj=bj;
-    float jx=(rnd()-0.5f)*0.6f/GX, jy=(rnd()-0.5f)*0.6f/GY;
+    float js=g_cells[g_side][bi][bj].miss? 0.f : 0.6f;          // no wobble on a spot that has missed: it is near an edge
+    float jx=(rnd()-0.5f)*js/GX, jy=(rnd()-0.5f)*js/GY;
     g_tx=std::min(std::max(cx(bi)+jx,b.x0),b.x1);
     g_ty=g_2d? std::min(std::max(cy(bj)+jy,b.y0),b.y1) : F<float>(g_m,M_POS+4);
 }
@@ -160,8 +167,8 @@ static const WP HORSESHOE[]={ {0.82f,0.34f},{0.72f,0.34f},{0.62f,0.34f},{0.52f,0
     {0.22f,0.77f},{0.32f,0.78f},{0.42f,0.78f},{0.52f,0.78f},{0.62f,0.78f},{0.72f,0.79f},{0.82f,0.80f} };
 static const WP* g_path=nullptr; static int g_pn=0, g_pi=0, g_pdir=1, g_pk=-1;
 static int g_pmiss[64]; static float g_poff[64]; static bool g_preAimed=false;
-// The seeded path was traced on side 0.  How the turned-over piece lines up is not known yet, so on a flipped side
-// the path is kept as is until it misses twice in a row without a hit; then it is mirrored along x (once per side).
+// The seeded path was traced on side 0.  A turned-over piece lies mirrored left-right, so on the flipped side the path
+// starts mirrored; if it misses twice in a row without a hit, it is used as traced instead (once per side).
 static bool g_pathMirror[2], g_mirrorDecided[2]; static int g_sideMisses=0;
 static float path_x(int k){ float x=g_path[k].x; return g_pathMirror[g_side]? 0.84f-x : x; }   // traced x spans 0.02..0.82
 static bool path_point(){
@@ -190,7 +197,7 @@ static void path_result(bool hit){
         else if(++g_sideMisses>=2){
             g_mirrorDecided[g_side]=true; g_pathMirror[g_side]=!g_pathMirror[g_side]; g_sideMisses=0;
             memset(g_pmiss,0,sizeof g_pmiss); memset(g_poff,0,sizeof g_poff);
-            logf("flipped side %d: path missed twice -> trying it mirrored",g_side); return;
+            logf("flipped side %d: path missed twice -> trying it %s",g_side,g_pathMirror[g_side]?"mirrored":"as traced"); return;
         }
     }
     if(hit){ g_pmiss[g_pk]=0; return; }
@@ -252,15 +259,33 @@ static bool g_oneMore=false;              // completion looked done but the game
 static int g_pass=0, g_passStrokes=0;      // anvil passes this piece, strokes in the current pass
 
 static void setph(Phase p,const char* why){ logf("phase %s -> %s (%s) st=%d comp=%.3f q=%.3f fire=%.0f stam=%.0f",PN[g_ph],PN[p],why,st(),comp(),qual(),fire(),stamina()); g_ph=p; g_phT=g_clock(); g_t=0; }
-// A turned-over 2D piece may line up as before or mirrored along x; nobody has traced that yet.  Cells that hit on the
-// old side both as they are and mirrored hit either way, so the new side starts with those instead of guessing
-// (a guess off the piece is a sparkless dud that costs quality and time).  Only for a side not learned yet.
-static void seed_side(int side){
-    auto& N=g_cells[side]; auto& O=g_cells[side^1]; int ny=g_2d?GY:1, any=0, n=0;
-    for(int i=0;i<GX;i++) for(int j=0;j<ny;j++) any+=N[i][j].hit+N[i][j].miss;
-    if(any) return;
-    for(int i=0;i<GX;i++) for(int j=0;j<ny;j++) if(O[i][j].hit>0 && O[GX-1-i][j].hit>0){ N[i][j].hit=1; n++; }
-    logf("side %d: %d spots that hit either way round",side,n);
+// Turned over, a piece lies mirrored left-right (an axe head that faced right now faces left; blades and horseshoes
+// are symmetric).  So a new side starts with the old side's good spots mirrored about the middle of the piece instead
+// of guessing (a guess off the piece is a sparkless dud that costs quality and time).  If the first two strokes there
+// miss before any hit, the side is seeded again as it lay before.  Only for a side that has not been learned yet.
+#ifndef KC_SEEDMIN
+#define KC_SEEDMIN 2
+#endif
+static const int SEED_MIN_HITS=KC_SEEDMIN;
+static bool g_seedDecided[2]={true,true}; static bool g_seedMirror[2]; static int g_seedMisses=0;
+static void seed_side(int side,bool mirror){
+    auto& N=g_cells[side]; auto& O=g_cells[side^1]; int ny=g_2d?GY:1, n=0;
+    Bounds b=bounds();
+    memset(N,0,sizeof N);
+    for(int i=0;i<GX;i++) for(int j=0;j<ny;j++) if(O[i][j].hit>=SEED_MIN_HITS && O[i][j].miss==0){   // reliable spots only: edge spots miss once turned
+        int k=i; if(mirror){ float mx=b.x0+b.x1-cx(i); k=std::min(GX-1,std::max(0,(int)(mx*GX))); }
+        if(!N[k][j].hit){ N[k][j].hit=1; n++; } }
+    for(int i=0;i<GX;i++) for(int j=0;j<ny;j++) if(O[i][j].hit==0 && O[i][j].miss>0){   // and its known misses (off the piece)
+        int k=i; if(mirror){ float mx=b.x0+b.x1-cx(i); k=std::min(GX-1,std::max(0,(int)(mx*GX))); }
+        if(!N[k][j].hit) N[k][j].miss=1; }
+    g_seedMirror[side]=mirror; g_seedDecided[side]=false; g_seedMisses=0;
+    logf("side %d: starting from %d spots of the other side%s",side,n,mirror?" (mirrored)":" (as they were)");
+}
+static void seed_result(bool hit){                  // first strokes on a newly seeded side
+    if(g_seedDecided[g_side] || g_ci<0) return;
+    if(hit){ g_seedDecided[g_side]=true; logf("side %d: %s spots hit",g_side,g_seedMirror[g_side]?"mirrored":"unmirrored"); return; }
+    if(++g_seedMisses>=2){ logf("side %d: %s spots missed twice -> trying them the other way",g_side,g_seedMirror[g_side]?"mirrored":"unmirrored");
+        seed_side(g_side,!g_seedMirror[g_side]); g_seedDecided[g_side]=true; }
 }
 static void do_flip(const char* why){       // the game's own Flip action (only valid at the idle anvil)
     g_flipped=true; g_sinceFlip=0; g_zeroStreak=0; g_preAimed=false;
@@ -286,7 +311,8 @@ static void start(){
     g_fireCap=9999.f; g_capT=0; g_bel=false; g_sub=Ready; g_rest=false; g_stamMax=std::max(stamina(),60.f); g_strikeMin=800.f; g_sweep=0; g_lastX=-1; g_forced=false; g_wsign=0; g_wsum=0; g_wn=0; g_rMiss=-1e9f; g_rHitMin=1e9f; g_missKnown=false;
     g_path=nullptr; g_pn=0; g_pi=0; g_pdir=1; g_pk=-1; g_preAimed=false; memset(g_pmiss,0,sizeof g_pmiss); memset(g_poff,0,sizeof g_poff);
     g_fresh=0; g_flips=0; g_afterFlipLog=0; g_oneMore=false; g_sideMisses=0; g_pass=0; g_passStrokes=0;
-    g_pathMirror[0]=g_pathMirror[1]=false; g_mirrorDecided[0]=true; g_mirrorDecided[1]=false;   // side 0 is the traced side
+    g_pathMirror[0]=false; g_pathMirror[1]=true; g_mirrorDecided[0]=true; g_mirrorDecided[1]=false;   // side 0 is the traced side; turned over = mirrored
+    g_seedDecided[0]=g_seedDecided[1]=true; g_seedMisses=0;
     if(!strcmp(wpid(),"horseshoe")){ g_path=HORSESHOE; g_pn=(int)(sizeof HORSESHOE/sizeof HORSESHOE[0]); logf("using seeded horseshoe path (%d spots)",g_pn); }
     Bounds b=bounds(); g_2d=is2d(b);
     char z[64]; logzones(z,sizeof z);
@@ -353,7 +379,8 @@ static void tick(float dt){
             if(!turned){ g_flipDisabled=true; logf("flip did nothing -> disabled"); }
             else {
                 g_side^=1; g_flips++; g_fresh=RHYTHM_STROKES; g_afterFlipLog=RHYTHM_STROKES+2; g_sideMisses=0;
-                seed_side(g_side);
+                { int ny=g_2d?GY:1, any=0; for(int i=0;i<GX;i++) for(int j=0;j<ny;j++) any+=g_cells[g_side][i][j].hit+g_cells[g_side][i][j].miss;
+                  if(!any && g_2d && !g_path) seed_side(g_side,true); }
                 memset(g_pmiss,0,sizeof g_pmiss); memset(g_poff,0,sizeof g_poff);       // the other side is new ground
                 logf("flipped, side=%d (next %d strokes aim at fresh spots)",g_side,RHYTHM_STROKES);
             }
@@ -380,7 +407,7 @@ static void tick(float dt){
             if(g_afterFlipLog>0){ g_afterFlipLog--;      // always logged: shows what a flip cost
                 logf("after flip: stroke#%d side=%d aim=(%.2f,%.2f) %s work=%.2f charge=%.2f gain=%.3f dq=%.4f q=%.3f bpm=%.1f",
                     g_strokeNo,g_side,g_tx,g_ty,hit?"HIT":"MISS",g_w0,F<float>(g_m,M_CHARGE),gain,dq,qual(),F<float>(g_m,M_BPM)); }
-            if(g_2d) path_result(hit);
+            if(g_2d){ if(g_path) path_result(hit); else seed_result(hit); }
             g_sub=Ready; g_sinceFlip++; g_oneMore=false;
             if(g_2d){ if(!path_point()) choose_point(); g_preAimed=true; aim(); }   // move early so the hammer has arrived by the swing
             break;
