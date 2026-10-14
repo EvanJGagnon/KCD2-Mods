@@ -1,0 +1,36 @@
+# Theatrical AutoMarksman (in development, automarksman/): compile check on a Windows runner, run the
+# offline ballistics tests, and attach the test install folder.  Separate from the published mods' build.
+name: AutoMarksman
+
+on:
+  push:
+    paths: ['automarksman/**', '.github/workflows/automarksman.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Find the MSVC x64 tools
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "no Visual Studio with the x64 C++ tools on this runner" }
+          "KC_VCVARS=$vs\VC\Auxiliary\Build\vcvars64.bat" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build (automarksman\build.bat)
+        shell: cmd
+        run: call automarksman\build.bat
+      - name: Offline tests
+        shell: cmd
+        run: type automarksman\out\dev\marksim.txt
+      - uses: actions/upload-artifact@v6
+        with:
+          name: automarksman-test
+          path: |
+            automarksman/dist/*.zip
+            automarksman/out/dev/
+          if-no-files-found: error

@@ -1,0 +1,61 @@
+THEATRICAL AUTOMARKSMAN 0.1.0 (TEST BUILD) - Kingdom Come: Deliverance II
+by Flubbermunchkin
+
+While Henry holds a drawn bow, the camera turns at a steady, human speed onto the head of the person
+(or the chest of the animal) nearest the centre of your view. It allows for the arrow's drop, for air
+drag, for the bow sitting beside Henry's eye and for a target that is walking or running.
+
+That is all it does. You still draw, hold and release the bow yourself. The game flies the arrow, sways
+the bow with Henry's skill and stamina, and decides whether the arrow hits. Nothing is teleported, no
+hit is forced, and no item, arrow or stat is changed.
+
+The mod learns your bow as you shoot: each arrow Henry looses tells it the real launch speed of that
+bow and arrow, and the arrow is followed in flight to measure its drop. The first arrow of a session
+uses a default; from the second one on the aim is fitted to your bow.
+
+This is a test build. It has not been played yet.
+
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
+
+INSTALL
+  Copy the "theatrical_automarksman" folder into <game>\Mods\
+  (you should end up with <game>\Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.dll).
+  Uninstall: delete that folder.
+
+HOW TO USE
+  1. Press F10 to switch the assist on (a notice says "AutoMarksman on"). F10 again switches it off.
+  2. Draw the bow and bring the target roughly to the middle of the screen (within about 10 degrees).
+  3. The camera settles on the aim point; release when you like.
+  Moving the mouse always wins: the assist lets go while you aim by hand and picks up again shortly after.
+
+SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
+  [Keys]    Toggle=F10            on/off key
+  [Options] StartEnabled=0        1 = on from the start
+            ConeDegrees=10        how far from the centre of the view a target may be
+            MaxDistance=80        metres
+            TurnSpeed=115         fastest camera turn, degrees per second
+            Responsiveness=9      how quickly the remaining error is closed
+            HeadDropCm=13         aim this far below the top of a person
+            HandsOffMs=400        pause after you move the mouse
+            ArrowSpeed=55         arrow speed assumed before the first arrow is measured
+            LeadMovingTargets=1   aim ahead of moving targets
+            TargetPeople=1, TargetAnimals=1
+            DebugLog=1            detailed log (kcd2_automarksman.log)
+
+KNOWN LIMITATIONS
+  - It does not check whether a wall or tree is between you and the target.
+  - Bow sway is left alone: a shaky, low-skill or tired Henry still misses.
+  - Only tested statically against the Steam version 1.5.x, build 15693.
+
+GAME UPDATES
+  The mod does not use fixed memory addresses. At startup it finds the game code it needs by pattern
+  and by class name. If a game update changes that code, the mod turns itself off and changes nothing.
+
+CREDITS
+  JerryYOJ - KCSE, the Address Library, and libKCD2 (GPL-3.0), whose public research notes on the
+  player's look angles, bow controller and projectiles this mod builds on.
+  inkcrow - Arrow Arc, which inspired the arc-prediction idea (no code was used).
