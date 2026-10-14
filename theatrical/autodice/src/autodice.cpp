@@ -19,10 +19,11 @@
 //   State C_PlayerTurnDiceGameState = a player chooses dice; state +0x18 = that player's model.
 //   C_DiceGamePlayerModel: +0x18 points this turn, +0x30 banked total, +0x58 index,
 //     +0xD8/+0xE0 dice on the table (vector of shared_ptr<C_DieModel>, 16 bytes each).
-//   C_DieModel: +0x28 id, +0x40 held (set aside this throw), +0x58 face 0..5,
+//   C_DieModel: +0x28 id, +0x40 state (0 free, 1 held this throw, 2 set aside earlier this turn), +0x58 face 0..5,
 //     +0x88 six side weights (float), +0xA0 first side value (6 = joker face: devil's head die).
 #include "kcd2_common.h"
 #include "dice_engine.h"
+#include "dice_turn.h"
 #include <thread>
 #include <atomic>
 #include <mutex>
@@ -78,10 +79,10 @@ struct Snap {
     int target = 0, turnPts = 0, total = 0, oppTotal = 0;
     std::vector<uintptr_t> dieObj;
     std::vector<dice::Die> table;     // all dice in the player's table vector
-    std::vector<bool> held;
+    std::vector<uint8_t> held;        // die state: dice::FREE / HELD / LOCKED
     std::vector<dice::Die> oppDice;
 };
-static bool read_dice(uintptr_t pm, std::vector<uintptr_t>& obj, std::vector<dice::Die>& out, std::vector<bool>* held) {
+static bool read_dice(uintptr_t pm, std::vector<uintptr_t>& obj, std::vector<dice::Die>& out, std::vector<uint8_t>* held) {
     uintptr_t b = F<uintptr_t>(pm, P_DICE0), e = F<uintptr_t>(pm, P_DICE1);
     if (e < b || (e - b) % 16 || (e - b) / 16 > 6) return false;
     for (uintptr_t p = b; p < e; p += 16) {
@@ -97,7 +98,8 @@ static bool read_dice(uintptr_t pm, std::vector<uintptr_t>& obj, std::vector<dic
         for (int i = 0; i < 6; i++) { float w = F<float>(z, Z_W + 4 * i); if (!(w >= 0.f && w < 1000.f)) ok = false; d.w[i] = w; s += w; }
         if (!ok || s <= 0.f) for (float& w : d.w) w = 1.f;
         obj.push_back(z); out.push_back(d);
-        if (held) held->push_back(F<uint8_t>(z, Z_HELD) != 0);
+        uint8_t st = F<uint8_t>(z, Z_HELD); if (st > dice::LOCKED) return false;
+        if (held) held->push_back(st);
     }
     return true;
 }
@@ -119,19 +121,25 @@ static bool snap(uintptr_t dice, Snap& s) {
 static void faces_str(const Snap& s, char* out, size_t cap) {
     size_t k = 0; out[0] = 0;
     for (size_t i = 0; i < s.table.size() && k + 8 < cap; i++)
-        k += sprintf_s(out + k, cap - k, "%s%s%s", i ? " " : "", s.table[i].face == dice::JOKER ? "J" : std::to_string(s.table[i].face + 1).c_str(), s.held[i] ? "*" : "");
+        k += sprintf_s(out + k, cap - k, "%s%s%s", i ? " " : "", s.table[i].face == dice::JOKER ? "J" : std::to_string(s.table[i].face + 1).c_str(),
+                       s.held[i] == dice::LOCKED ? "#" : s.held[i] == dice::HELD ? "*" : "");
+}
+static std::vector<dice::TableDie> table_of(const Snap& s) {
+    std::vector<dice::TableDie> t(s.table.size());
+    for (size_t i = 0; i < t.size(); i++) { t[i].die = s.table[i]; t[i].state = s.held[i]; }
+    return t;
 }
 
 // ---------------- the decision runs on a worker thread (the first one of a game can take a moment) ----------------
 static std::mutex g_mx;
 static std::atomic<int> g_job{0};          // 0 idle, 1 running, 2 done
 static dice::Decision g_result;
-static void think(dice::Context cx, std::vector<dice::Die> table, std::vector<dice::Die> opp, int turn) {
+static void think(dice::Context cx, std::vector<dice::Die> table, std::vector<dice::Die> aside, std::vector<dice::Die> opp, int turn) {
     std::thread([=]() {
         std::vector<const dice::Die*> op; for (auto& x : opp) op.push_back(&x);
         dice::Context c = cx;
         c.oppThreat = dice::win_this_turn(std::max(50, c.target - c.opp), dice::avg_dist(op));
-        dice::Decision d = dice::decide(c, table, {}, turn);
+        dice::Decision d = dice::decide(c, table, aside, turn);
         { std::lock_guard<std::mutex> l(g_mx); g_result = d; }
         g_job = 2;
     }).detach();
@@ -145,7 +153,8 @@ static Phase g_ph = IDLE;
 static uint64_t g_at = 0, g_since = 0;
 static uintptr_t g_dice = 0, g_waitState = 0;
 static dice::Decision g_plan;
-static std::vector<dice::Die> g_lookTable;  // the dice the plan was made for
+static dice::ThrowView g_view;             // the dice the plan was made for (free = just thrown, aside = locked)
+static dice::Context g_cx; static int g_turnAtLook = 0;
 static uintptr_t g_logState = 0; static int g_logInput = -1;
 static uintptr_t g_base = 0;
 static std::vector<int> g_wantIds;         // die ids to be held
@@ -198,10 +207,16 @@ static void tick(uintptr_t dice) {
     case LOOK: {
         if (s.table.empty()) { logf("no dice on the table in Henry's turn - stopping"); stop("no dice"); return; }
         if (g_job == 1) return;
+        g_view = dice::view_of(table_of(s));
+        if (g_view.free.empty()) {                          // every die set aside: the game is about to hand all six back
+            if (now - g_since > 4000) { logf("no free dice on the table [%s] - stopping", fs); stop("no free dice"); }
+            return;
+        }
         dice::Context cx; cx.total = s.total; cx.opp = s.oppTotal; cx.target = s.target > 0 ? s.target : 4000; cx.risk = g_risk;
-        logf("throw: [%s]  turn %d, total %d, opponent %d, target %d", fs, s.turnPts, s.total, s.oppTotal, cx.target);
-        g_lookTable = s.table;
-        g_job = 1; think(cx, g_lookTable, s.oppDice, s.turnPts);
+        logf("throw: [%s]  turn %d, total %d, opponent %d, target %d (%d dice thrown, %d set aside)", fs, s.turnPts, s.total,
+             s.oppTotal, cx.target, (int)g_view.free.size(), (int)g_view.aside.size());
+        g_cx = cx; g_turnAtLook = s.turnPts;
+        g_job = 1; think(cx, g_view.free, g_view.aside, s.oppDice, s.turnPts);
         enter(THINK, 0);
         return;
     }
@@ -210,21 +225,21 @@ static void tick(uintptr_t dice) {
         g_job = 0;
         { std::lock_guard<std::mutex> l(g_mx); g_plan = g_result; }
         if (g_plan.bust) { logf("nothing scores - waiting for the game to call the bust"); g_waitState = s.state; enter(WAIT, 0); return; }
-        g_wantIds.clear(); for (int i : g_plan.hold) g_wantIds.push_back(g_lookTable[i].id);
+        g_wantIds = dice::wanted_ids(g_view, g_plan);
         char hs[64]; size_t k = 0; hs[0] = 0;
-        for (int i : g_plan.hold) k += sprintf_s(hs + k, sizeof hs - k, "%s%s", k ? " " : "", g_lookTable[i].face == dice::JOKER ? "J" : std::to_string(g_lookTable[i].face + 1).c_str());
+        for (int i : g_plan.hold) k += sprintf_s(hs + k, sizeof hs - k, "%s%s", k ? " " : "", g_view.free[i].face == dice::JOKER ? "J" : std::to_string(g_view.free[i].face + 1).c_str());
         logf("plan: set aside [%s] for %d, then %s  (pass %.0f / throw on %.0f)", hs, g_plan.score, g_plan.pass ? "PASS" : "THROW AGAIN", g_plan.passValue, g_plan.throwValue);
         g_holdTries = 0;
         enter(HOLD, pause_ms(300, 600));
         return;
     }
     case HOLD: {                                            // one die per step, like a hand reaching out
-        for (size_t i = 0; i < s.table.size(); i++) {
-            bool want = std::find(g_wantIds.begin(), g_wantIds.end(), s.table[i].id) != g_wantIds.end();
-            if (want == (bool)s.held[i]) continue;
-            if (++g_holdTries > 3 * (int)s.table.size() + 6) { logf("dice do not respond to holding - stopping"); stop("hold failed"); return; }
-            pHoldDie((void*)s.model, (uint32_t)s.table[i].id, want);
-            KC_DLOG("%s die %d (%s)", want ? "hold" : "release", s.table[i].id, s.table[i].face == dice::JOKER ? "joker" : std::to_string(s.table[i].face + 1).c_str());
+        dice::HoldStep st = dice::next_hold(table_of(s), g_wantIds);   // never touches dice set aside earlier
+        if (st.index >= 0) {
+            size_t i = (size_t)st.index;
+            if (++g_holdTries > 3 * (int)g_view.free.size() + 6) { logf("dice do not respond to holding [%s] - stopping", fs); stop("hold failed"); return; }
+            pHoldDie((void*)s.model, (uint32_t)s.table[i].id, st.hold);
+            KC_DLOG("%s die %d (%s)", st.hold ? "hold" : "release", s.table[i].id, s.table[i].face == dice::JOKER ? "joker" : std::to_string(s.table[i].face + 1).c_str());
             enter(HOLD, pause_ms(380, 720));
             return;
         }
@@ -235,17 +250,21 @@ static void tick(uintptr_t dice) {
         int sc = 0; bool ok = pEval((void*)(s.model + M_DELEGATE), true, &sc, nullptr, false);
         if (!ok || sc <= 0) {
             logf("the game does not accept [%s] as a scoring set (%d) - releasing them and stopping", fs, sc);
-            for (size_t i = 0; i < s.table.size(); i++) if (s.held[i]) pHoldDie((void*)s.model, (uint32_t)s.table[i].id, false);
+            for (size_t i = 0; i < s.table.size(); i++) if (s.held[i] == dice::HELD) pHoldDie((void*)s.model, (uint32_t)s.table[i].id, false);
             stop("selection rejected"); return;
         }
-        if (sc != g_plan.score) logf("note: the game scores this set %d (engine %d) - badge or rule difference", sc, g_plan.score);
+        if (sc != g_plan.score) {                           // the game's count wins: decide pass / throw again with it
+            bool pass = dice::pass_with(g_cx, g_view, g_plan, g_turnAtLook, sc);
+            logf("note: the game scores this set %d (engine %d) - badge or rule difference; now %s", sc, g_plan.score, pass ? "PASS" : "THROW AGAIN");
+            g_plan.score = sc; g_plan.pass = pass;
+        }
         enter(ACT, pause_ms(500, 1000));
         return;
     }
     case ACT: {
         g_waitState = s.state; g_throws++;
         if (g_plan.pass) { logf("pass: banking %d + %d", s.turnPts, g_plan.score); g_turns++; pPass((void*)dice); }
-        else { int left = (int)(s.table.size() - g_plan.hold.size()); logf("throw again with %d dice", left ? left : 6); pScore((void*)dice); }
+        else { int left = (int)(g_view.free.size() - g_plan.hold.size()); logf("throw again with %d dice", left ? left : 6); pScore((void*)dice); }
         enter(WAIT, 0);
         return;
     }
@@ -304,7 +323,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_risk = std::min(2.0, std::max(0.5, kc::ini_int("Options", "RiskPercent", 100) / 100.0));
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); g_base = R.im.base;
-    logf("start v0.1.0 (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.1.1 (game ts 0x%08X)", R.im.timestamp);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pScore = (Action_t)f.score; pPass = (Action_t)f.pass; pHoldDie = (HoldDie_t)f.holddie; pEval = (Eval_t)f.eval;

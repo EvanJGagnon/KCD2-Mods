@@ -7,6 +7,9 @@
 //
 // Builds anywhere:  g++ -O2 -std=c++17 -Isrc tools/dicesim.cpp -o dicesim   (or cl /O2 /EHsc /std:c++17)
 #include "dice_engine.h"
+#include "dice_turn.h"
+#include <algorithm>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <random>
@@ -23,6 +26,119 @@ static int sc(std::initializer_list<int> faces) {       // faces 1..6 as printed
     int c[6] = {0}, j = 0;
     for (int f : faces) { if (f == 0) j++; else c[f - 1]++; }
     return scorer().score(c, j);
+}
+
+// ---------------- the mod's per-throw bookkeeping against a model of the game's dice ----------------
+static std::vector<TableDie> tbl(std::initializer_list<int> faces, std::initializer_list<int> locked) {
+    std::vector<TableDie> t; int id = 0;
+    for (int f : faces) { TableDie d; d.die.id = id; d.die.face = f == 0 ? JOKER : f - 1; t.push_back(d); id++; }
+    for (int i : locked) t[i].state = LOCKED;
+    return t;
+}
+static bool has(const std::vector<int>& v, int x) { return std::find(v.begin(), v.end(), x) != v.end(); }
+// The game's scorer: only dice in state HELD count (delegate vtbl[10] collects state == 1).
+static int game_score(const std::vector<TableDie>& t) {
+    int c[6] = {0}, j = 0, k = 0;
+    for (auto& d : t) if (d.state == HELD) { k++; if (d.die.face == JOKER) j++; else c[d.die.face]++; }
+    return k ? scorer().score(c, j) : NEG;
+}
+// Drive the hold steps like the plugin does; the game refuses to change a LOCKED die. Returns steps or -1.
+static int drive_holds(std::vector<TableDie>& t, const std::vector<int>& want, int& lockedTouches) {
+    int free = 0; for (auto& d : t) free += d.state != LOCKED;
+    for (int tries = 0; tries <= 3 * free + 6; tries++) {
+        HoldStep st = next_hold(t, want);
+        if (st.index < 0) return tries;
+        if (t[st.index].state == LOCKED) { lockedTouches++; continue; }
+        t[st.index].state = st.hold ? HELD : FREE;
+    }
+    return -1;
+}
+static void turn_tests() {
+    // Round-1 log, 19:26:47: [1# 1 3 3 2 1], turn 100, total 600, target 1500. The locked 1 is not in play:
+    // the plan may only use the two thrown 1s (the game scored them 200, not 1000).
+    {
+        auto t = tbl({1, 1, 3, 3, 2, 1}, {0});
+        Context cx; cx.total = 600; cx.target = 1500;
+        ThrowView v = view_of(t);
+        expect("log A: thrown dice", (int)v.free.size(), 5);
+        Decision d = decide(cx, v.free, v.aside, 100);
+        auto want = wanted_ids(v, d);
+        expect("log A: locked die not planned", has(want, 0), 0);
+        int touches = 0; int steps = drive_holds(t, want, touches);
+        expect("log A: holds converge", steps >= 0, 1);
+        expect("log A: no locked die touched", touches, 0);
+        expect("log A: game score == plan score", game_score(t), d.score);
+        expect("log A: plan uses only thrown 1s (100 or 200)", d.score == 100 || d.score == 200, 1);
+    }
+    // Round-1 log, 19:27:14: [3 3 5# 3 3 2], turn 50, totals 900/900, target 1500. It tried to release the
+    // locked 5 22 times. Now: hold the four 3s (600) and never touch die 2.
+    {
+        auto t = tbl({3, 3, 5, 3, 3, 2}, {2});
+        Context cx; cx.total = 900; cx.opp = 900; cx.target = 1500;
+        ThrowView v = view_of(t);
+        Decision d = decide(cx, v.free, v.aside, 50);
+        auto want = wanted_ids(v, d);
+        expect("log B: locked 5 not planned", has(want, 2), 0);
+        int touches = 0; int steps = drive_holds(t, want, touches);
+        expect("log B: holds converge", steps >= 0, 1);
+        expect("log B: no locked die touched", touches, 0);
+        expect("log B: plan = four 3s", d.score, 600);
+        expect("log B: game agrees", game_score(t), 600);
+        expect("log B: 600 + 50 + 900 wins, so pass", d.pass, 1);
+    }
+    // A die the player held by hand before pressing the key (state HELD) is still free to release.
+    {
+        auto t = tbl({2, 2, 3, 4, 6, 1}, {});
+        t[0].state = HELD;
+        std::vector<int> want = {5};
+        int touches = 0; drive_holds(t, want, touches);
+        expect("manual hold released", t[0].state, FREE);
+        expect("1 held", t[5].state, HELD);
+    }
+    // The game scores a set differently (a badge): pass / throw is decided again with the game's count.
+    {
+        auto t = tbl({1, 2, 3, 4, 6, 6}, {});
+        Context cx; cx.total = 0; cx.target = 4000;
+        ThrowView v = view_of(t); Decision d = decide(cx, v.free, v.aside, 0);
+        expect("badge: reaching the target passes", pass_with(cx, v, d, 0, 4000), 1);
+        expect("badge: 100 at the start throws on", pass_with(cx, v, d, 0, 100), 0);
+    }
+    // Whole turns against the game model: free dice are thrown, held dice become locked on "throw again",
+    // all six come back after hot dice. Engine and game must agree on every set, and no locked die is touched.
+    {
+        std::mt19937_64 r(7); int mism = 0, touches = 0, stuck = 0, hot = 0, turns = 0;
+        auto throwf = [&](std::vector<TableDie>& t) { for (auto& d : t) if (d.state == FREE) d.die.face = (int)(r() % 6); };
+        for (int game = 0; game < 300; game++) {
+            int total = 0, opp = (int)(r() % 30) * 50;
+            for (int tn = 0; tn < 40 && total < 4000; tn++) {
+                std::vector<TableDie> t(6); for (int i = 0; i < 6; i++) t[i].die.id = 100 + i;
+                if (tn % 3 == 2) t[1].die.jokerFace0 = true;
+                throwf(t); for (auto& d : t) if (d.die.jokerFace0 && d.die.face == 0) d.die.face = JOKER;
+                int turn = 0; turns++;
+                for (int g = 0; g < 50; g++) {
+                    Context cx; cx.total = total; cx.opp = opp; cx.target = 4000;
+                    ThrowView v = view_of(t);
+                    Decision d = decide(cx, v.free, v.aside, turn);
+                    if (d.bust) break;
+                    auto want = wanted_ids(v, d);
+                    if (drive_holds(t, want, touches) < 0) { stuck++; break; }
+                    int gs = game_score(t);
+                    if (gs != d.score) { mism++; break; }
+                    turn += gs;
+                    if (d.pass) { total += turn; break; }
+                    for (auto& x : t) if (x.state == HELD) x.state = LOCKED;
+                    bool all = std::all_of(t.begin(), t.end(), [](const TableDie& x) { return x.state == LOCKED; });
+                    if (all) { hot++; for (auto& x : t) x.state = FREE; }
+                    throwf(t); for (auto& x : t) if (x.state == FREE && x.die.jokerFace0 && x.die.face == 0) x.die.face = JOKER;
+                }
+            }
+        }
+        expect("model: engine and game scores agree", mism, 0);
+        expect("model: locked dice never touched", touches, 0);
+        expect("model: holds always converge", stuck, 0);
+        expect("model: hot dice happened", hot > 0, 1);
+        printf("game model: %d turns, %d hot-dice rethrows\n", turns, hot);
+    }
 }
 
 static void tests() {
@@ -69,6 +185,7 @@ static void tests() {
     expect("1 5 2 3 3 6: keep one die", (int)d.hold.size(), 1);
     expect("1 5 2 3 3 6: keep the 1", s[d.hold[0]].face, 0);
     expect("1 5 2 3 3 6: throw again", d.pass, 0);
+    turn_tests();
     printf("%s (%d failures)\n", fails ? "TESTS FAILED" : "all tests passed", fails);
 }
 

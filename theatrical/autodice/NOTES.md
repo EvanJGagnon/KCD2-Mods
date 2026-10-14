@@ -46,12 +46,19 @@ each extra die doubles. One extra combination depends on a badge (global 0x55EDD
 in 0x2E86078. Badges can change per-player tables; the mod reads the game's own score of the held set
 (delegate vtbl[10]) before acting and logs any difference from its own count.
 
-## Assumptions to confirm in the test session
-1. The table vector (`+0xD8`) holds only the dice on the table; dice set aside earlier in the turn are
-   elsewhere. (Evidence: the scoring of held dice collects every die with held = 1 from it.)
-2. PlayerTurn is entered after the dice have landed (no manual first throw).
-3. `dice_pass` banks the held selection together with the turn points. (Static evidence: Passing state
-   OnEnter 0x2E91F28 calls delegate vtbl[9] 0x2E93EE4, which scores the held dice and applies them
-   unless the player model's `+0x198` already-scored flag is set.)
-4. Player 0 (`model+0x20`) is Henry.
-The log prints faces, held flags, turn/total before and after every action to check each of these.
+## Die state (+0x40), learned from the round-1 test (2026-10-14)
+`+0x40` is a state byte, not a bool: 0 = free on the table, 1 = held this throw, 2 = set aside on an earlier
+throw of this turn. All six dice stay in the `+0xD8` vector for the whole turn. The scorer (collect 0x2E89FF4
+with flag 1) counts only state 1; the visual-dice loop 0x2E8BE7C and 0x2E99004 skip state 2. `dice_hold`
+calls HoldDie with `state != 1`, so "clicking" a locked die asks to hold it again; the game ignores it.
+v0.1.0 read any non-zero state as held: it planned with locked dice ([1# 1 3 3 2 1] planned 1000, the game
+scored 200) and tried to release a locked 5 until it gave up. v0.1.1 plans only with the dice just thrown
+(state 0/1), passes the locked dice to the engine as set aside, never holds or releases a locked die
+(src/dice_turn.h), and re-decides pass / throw again with the game's own score when it differs.
+The log marks held dice `*` and locked dice `#`.
+
+## Round-1 results for the original assumptions
+1. Table vector holds only the dice on the table: **false** (see above; fixed in 0.1.1).
+2. PlayerTurn is entered after the dice have landed: **confirmed** (state 0x3F71A00 rolling, then 0x3F711E0).
+3. `dice_pass` banks the held selection with the turn points: **confirmed** (turn 100 + held 200 -> total +300).
+4. Player 0 is Henry: **confirmed**.

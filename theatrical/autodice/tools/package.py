@@ -6,7 +6,7 @@ R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 LICENSE = os.path.join(R, '..', '..', 'LICENSE')     # the repository's GPL v3
 AUTHOR = 'Flubbermunchkin'
 MOD = dict(folder='theatrical_autodice', title='Theatrical AutoDice', zip='TheatricalAutoDice', dll='kcd2_autodice.dll',
-           ver='0.1.0', readme='theatrical_autodice',
+           ver='0.1.1', readme='theatrical_autodice',
            desc="Henry plays his own turns at dice with the game's own actions: he picks the dice worth keeping and decides when to pass. F3 starts and stops.",
            text=[],
            ini='[Keys]\n'
