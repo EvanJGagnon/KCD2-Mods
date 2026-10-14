@@ -6,14 +6,15 @@ R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 LICENSE = os.path.join(R, '..', '..', 'LICENSE')     # the repository's GPL v3
 AUTHOR = 'Flubbermunchkin'
 MOD = dict(folder='theatrical_autofollow', title='Theatrical AutoFollow', zip='TheatricalAutoFollow', dll='kcd2_autofollow.dll',
-           ver='0.1.0', readme='theatrical_autofollow',
-           desc="Henry can follow any walking NPC with the game's own follow action (the game's FollowAlwaysCanFollow switch). F10 toggles.",
+           ver='0.2.0', readme='theatrical_autofollow',
+           desc="Henry can follow anyone with the game's own follow action, as if they were a guide. ] toggles.",
            text=[('taf_on', 'AutoFollow: you can follow anyone'), ('taf_off', 'AutoFollow: off (vanilla following)')],
            ini='[Keys]\n'
-               '; key: F1-F12, a letter or digit, or a symbol key such as ]\nToggle=F10\n\n'
+               '; key: F1-F12, a letter or digit, or a symbol key such as ]\nToggle=]\n\n'
                '[Options]\n'
                '; 1 = follow-anyone is on when the game starts (the key switches it at any time)\nEnabled=1\n'
                '; 1 = show a short message when the key switches it\nNotices=1\n'
+               "; 1 = also set the game's own (cheat-locked, otherwise unused) wh_player_FollowAlwaysCanFollow switch\nSetCvar=1\n"
                "; 1 = turn on the game's own follow debug drawing too (for testing; may show nothing in the release game)\nDebugDraw=0\n"
                '; 1 = write a detailed log (for bug reports)\nDebugLog=0\n')
 

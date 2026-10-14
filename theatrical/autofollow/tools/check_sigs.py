@@ -22,6 +22,11 @@ def branch(a):
     return rel(a + 1)
 def cstr(a): o = a - B; return img[o:img.index(b'\0', o)].decode()
 
+site = find('SIG_FOLLOWABLE'); patch = site + 0x51
+center = site + 0x0E + struct.unpack('<b', img[site + 0x0D - B:site + 0x0E - B])[0]
+if not at(center, 'SIG_CENTER'): sys.exit('FAIL followable center result')
+if img[patch - B:patch - B + 2] != b'\xc6\x47': sys.exit('FAIL patch site bytes')
+print(f'followable chk {site - B:#x}  patch {patch - B:#x}: C6 47 -> EB {center - (patch + 2):02X} (jmp {center - B:#x}: center, followable)')
 call = find('SIG_CVARS_CALL'); getter = branch(call); regfn = branch(call + 8)
 if not at(getter, 'SIG_GETTER'): sys.exit('FAIL getter')
 block = rel(getter + 0x2A)

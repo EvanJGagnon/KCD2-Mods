@@ -1,7 +1,7 @@
 # Theatrical AutoFollow: research notes (build 15693)
 
 Static analysis of `WHGame.dll` (Steam build 15693, image base 0x180000000). Addresses are VAs.
-Reproduce with `python tools/check_sigs.py <WHGame.dll>`.
+Reproduce with `python tools/check_sigs.py <WHGame.dll>`; `tools/fulltest` runs the real startup on a mapped WHGame.dll (also under Wine).
 
 ## The switch
 
@@ -39,11 +39,30 @@ So the variable is at **0x1855DC2A0** (.data, writable) in this build.
 Registering an int cvar by pointer writes the default into it, so a value written before the game
 registers the group is reset to 0. The mod re-checks four times a second and puts it back.
 
-## Not yet found
+## Round 1 (2026-10-14): the switch alone does nothing
 
-The reader of block+0x3E0 (the "can follow" check). The Lua binding `CanFollow` (name 0x183ECBBF0, used at
-0x18128A33C) goes through a virtual call (`[vtbl+0xA0]`, thunk 0x18213A0C0), so it was not traced
-statically. The in-game test settles whether the switch does what its description says.
+In game the mod set the variable to 1 (log: 0 -> 1, again after load) but no NPC could be followed. No
+code reading block+0x3E0 was found: no rip-relative reference to the field, no `[reg+3E0h]` read within
+~200 instructions of any of the 222 getter calls (also through one level of argument passing), and the
+name string is only referenced by the registration. The cvar looks registered but unused in the release
+build. The mod still sets it (`SetCvar=1`), harmless.
+
+## Who can be followed (the real gate)
+
+The chat-focus HUD/action update 0x18082DFA4 (strings `chat_focus_follow_init[_press]`,
+`ui_hud_follow_start/stop`, `ui_hud_focus_start`) shows "follow start" when
+`CanFollowTarget 0x18082E974(this, targetId) && 0x182AA83F4(this, targetId)` (r12b).
+`CanFollowTarget`: player not in excluded states (0x18082EA40, player vtbl checks), target entity exists,
+target actor's `[0x990]->vtbl[0x298]` in state 0/5/0x25 (tail 0x182249EA4), ... and
+**0x18129DA18(out, targetId)**: target soul (actor+0x668) not excluded (soul vtbl[0x38], vtbl[0x30]),
+then `HasSideEffect(0x38/0x39/0x3A)` = followableNPCCenter/Left/Right (name table 0x180BE51C3..F9).
+Result `{u8 position, u8 valid}`: 0x100 center, 0x101 left, 0x102 right, valid=0 otherwise.
+The follow action's update 0x18287DE7C calls the same two functions every tick (position stored at +0x78).
+
+**0.2.0 fix:** at 0x18129DB22 the "none of the three" path `C6 47 01 00` (mov byte [rdi+1],0) becomes
+`EB 21` (jmp 0x18129DB45: mov word [rdi],0x100 = center, followable). Early refusals (no soul, excluded
+soul) keep their own path. Signature anchors on the three side-effect ids; the jump distance is computed
+from the center branch and the target bytes verified. Aligned 2-byte atomic write; restored when off.
 
 ## Unrelated look-alikes
 

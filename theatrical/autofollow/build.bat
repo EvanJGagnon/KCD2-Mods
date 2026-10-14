@@ -14,5 +14,6 @@ set LF=/link /DLL user32.lib kernel32.lib
 cl %CF% /LD src\autofollow.cpp /Foout\obj\ /Feout\kcd2_autofollow.dll %LF% || exit /b 1
 cl %CF% /DKC_DEVTOOLS /LD src\autofollow.cpp /Foout\obj\ /Feout\dev\kcd2_autofollow.dll %LF% || exit /b 1
 cl /nologo /O2 tools\selftest.cpp /Foout\obj\ /Feout\dev\selftest.exe || exit /b 1
+cl /nologo /O2 tools\fulltest.cpp /Foout\obj\ /Feout\dev\fulltest.exe || exit /b 1
 del /q out\*.exp out\*.lib out\dev\*.exp out\dev\*.lib 2>nul
 echo Build OK.
