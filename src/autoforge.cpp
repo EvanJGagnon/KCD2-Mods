@@ -107,24 +107,35 @@ struct Cell{ int hit, miss; int lastUse; };
 static Cell g_cells[2][GX][GY]; static int g_side=0; static bool g_2d=false; static int g_strokeNo=0;
 static float cx(int i){ return (i+0.5f)/GX; } static float cy(int j){ return (j+0.5f)/GY; }
 static bool inb(const Bounds& b,float x,float y){ return x>=b.x0-0.02f&&x<=b.x1+0.02f&&(!g_2d||(y>=b.y0-0.02f&&y<=b.y1+0.02f)); }
-static uint32_t g_rng=0x1234567;
+#ifndef KC_SEED
+#define KC_SEED 0x1234567
+#endif
+static uint32_t g_rng=KC_SEED;
 static float rnd(){ g_rng=g_rng*1664525u+1013904223u; return (g_rng>>8)/16777216.f; }
 static int g_ci=-1,g_cj=-1; static float g_tx=0.5f,g_ty=0.5f;
 static int g_fresh=0;                       // strokes left that should land on a fresh spot (set after a flip)
 static int g_flips=0, g_afterFlipLog=0;
+#ifndef KC_EXPLORE
+#define KC_EXPLORE 0.1f
+#endif
+static const float EXPLORE_KNOWN=KC_EXPLORE;
 static void choose_point(){
     Bounds b=bounds(); int ny=g_2d?GY:1;
     auto& C=g_cells[g_side];
     int bi=-1,bj=-1; float best=-1e9f;
     bool anyGood=false; for(int i=0;i<GX;i++) for(int j=0;j<ny;j++) if(C[i][j].hit>0) anyGood=true;
-    bool explore = !anyGood || rnd()<0.25f;
+    int good=0; for(int i=0;i<GX;i++) for(int j=0;j<ny;j++) if(C[i][j].hit>0) good++;
+    bool explore = !anyGood || rnd()<(good>=4? EXPLORE_KNOWN : 0.25f);   // misses cost quality: explore less once spots are known
     for(int i=0;i<GX;i++) for(int j=0;j<ny;j++){
         float x=cx(i), y=g_2d?cy(j):0.5f; if(!inb(b,x,y)) continue;
         Cell& c=C[i][j];
         if(g_strokeNo-c.lastUse<=2 && c.lastUse>0) continue;               // no striking the same place
         float s;
         if(c.hit==0 && c.miss>=1) continue;                                 // proven miss
-        if(!explore){ if(c.hit==0) continue; s=(c.hit+1.f)/(c.hit+c.miss+2.f)*10.f+(g_strokeNo-c.lastUse)*0.1f; }
+        float w=remainingAt(x,y);
+        if(c.hit>0 && exhausted(w)) continue;                               // worked out on this side: a dud, not a hit
+        if(g_fresh>0 && c.hit>0){ s=w*10.f; }                               // no rhythm yet (just flipped): freshest known spot
+        else if(!explore){ if(c.hit==0) continue; s=(c.hit+1.f)/(c.hit+c.miss+2.f)*10.f+(g_strokeNo-c.lastUse)*0.1f+w*4.f; }
         else if(c.hit==0 && c.miss==0){
             // unknown cell: prefer ones next to known hits, else near the piece centre
             float nb=0; for(int di=-1;di<=1;di++) for(int dj=-1;dj<=1;dj++){ int a=i+di,bb=j+dj; if(a>=0&&a<GX&&bb>=0&&bb<ny&&C[a][bb].hit>0) nb+=1; }
@@ -237,9 +248,20 @@ static bool g_flipped=false, g_flipDisabled=false; static int g_zeroStreak=0, g_
 static float g_fireCap=9999.f, g_capRef=0; static uint64_t g_capT=0; static bool g_bel=false;
 static kc::Hotkey g_key; static int g_hits=0,g_miss=0;
 static int g_insane=0; static bool g_dead=false;
+static bool g_oneMore=false;              // completion looked done but the game did not finish: strike again first
 static int g_pass=0, g_passStrokes=0;      // anvil passes this piece, strokes in the current pass
 
 static void setph(Phase p,const char* why){ logf("phase %s -> %s (%s) st=%d comp=%.3f q=%.3f fire=%.0f stam=%.0f",PN[g_ph],PN[p],why,st(),comp(),qual(),fire(),stamina()); g_ph=p; g_phT=g_clock(); g_t=0; }
+// A turned-over 2D piece may line up as before or mirrored along x; nobody has traced that yet.  Cells that hit on the
+// old side both as they are and mirrored hit either way, so the new side starts with those instead of guessing
+// (a guess off the piece is a sparkless dud that costs quality and time).  Only for a side not learned yet.
+static void seed_side(int side){
+    auto& N=g_cells[side]; auto& O=g_cells[side^1]; int ny=g_2d?GY:1, any=0, n=0;
+    for(int i=0;i<GX;i++) for(int j=0;j<ny;j++) any+=N[i][j].hit+N[i][j].miss;
+    if(any) return;
+    for(int i=0;i<GX;i++) for(int j=0;j<ny;j++) if(O[i][j].hit>0 && O[GX-1-i][j].hit>0){ N[i][j].hit=1; n++; }
+    logf("side %d: %d spots that hit either way round",side,n);
+}
 static void do_flip(const char* why){       // the game's own Flip action (only valid at the idle anvil)
     g_flipped=true; g_sinceFlip=0; g_zeroStreak=0; g_preAimed=false;
     act0(A_FLIP); setph(Flip,why);
@@ -263,7 +285,7 @@ static void start(){
     memset(g_cells,0,sizeof g_cells); g_side=0; g_strokeNo=0; g_hits=g_miss=0; g_flipped=false; g_flipDisabled=false; g_zeroStreak=0; g_sinceFlip=0;
     g_fireCap=9999.f; g_capT=0; g_bel=false; g_sub=Ready; g_rest=false; g_stamMax=std::max(stamina(),60.f); g_strikeMin=800.f; g_sweep=0; g_lastX=-1; g_forced=false; g_wsign=0; g_wsum=0; g_wn=0; g_rMiss=-1e9f; g_rHitMin=1e9f; g_missKnown=false;
     g_path=nullptr; g_pn=0; g_pi=0; g_pdir=1; g_pk=-1; g_preAimed=false; memset(g_pmiss,0,sizeof g_pmiss); memset(g_poff,0,sizeof g_poff);
-    g_fresh=0; g_flips=0; g_afterFlipLog=0; g_sideMisses=0; g_pass=0; g_passStrokes=0;
+    g_fresh=0; g_flips=0; g_afterFlipLog=0; g_oneMore=false; g_sideMisses=0; g_pass=0; g_passStrokes=0;
     g_pathMirror[0]=g_pathMirror[1]=false; g_mirrorDecided[0]=true; g_mirrorDecided[1]=false;   // side 0 is the traced side
     if(!strcmp(wpid(),"horseshoe")){ g_path=HORSESHOE; g_pn=(int)(sizeof HORSESHOE/sizeof HORSESHOE[0]); logf("using seeded horseshoe path (%d spots)",g_pn); }
     Bounds b=bounds(); g_2d=is2d(b);
@@ -292,7 +314,7 @@ static void tick(float dt){
     float stam=stamina(); if(stam>g_stamMax) g_stamMax=stam;
     uint64_t inPh= now>g_phT? now-g_phT : 0;
 
-    if(c>=0.999f && g_ph!=Finish && g_sub!=Charging){ bellows(false); setph(Finish,"completion reached"); }
+    if(c>=0.999f && g_ph!=Finish && g_sub!=Charging && !g_oneMore){ bellows(false); setph(Finish,"completion reached"); }
 
     switch(g_ph){
     case Heat: {
@@ -331,6 +353,7 @@ static void tick(float dt){
             if(!turned){ g_flipDisabled=true; logf("flip did nothing -> disabled"); }
             else {
                 g_side^=1; g_flips++; g_fresh=RHYTHM_STROKES; g_afterFlipLog=RHYTHM_STROKES+2; g_sideMisses=0;
+                seed_side(g_side);
                 memset(g_pmiss,0,sizeof g_pmiss); memset(g_poff,0,sizeof g_poff);       // the other side is new ground
                 logf("flipped, side=%d (next %d strokes aim at fresh spots)",g_side,RHYTHM_STROKES);
             }
@@ -358,7 +381,7 @@ static void tick(float dt){
                 logf("after flip: stroke#%d side=%d aim=(%.2f,%.2f) %s work=%.2f charge=%.2f gain=%.3f dq=%.4f q=%.3f bpm=%.1f",
                     g_strokeNo,g_side,g_tx,g_ty,hit?"HIT":"MISS",g_w0,F<float>(g_m,M_CHARGE),gain,dq,qual(),F<float>(g_m,M_BPM)); }
             if(g_2d) path_result(hit);
-            g_sub=Ready; g_sinceFlip++;
+            g_sub=Ready; g_sinceFlip++; g_oneMore=false;
             if(g_2d){ if(!path_point()) choose_point(); g_preAimed=true; aim(); }   // move early so the hammer has arrived by the swing
             break;
         }
@@ -395,6 +418,8 @@ static void tick(float dt){
         inPh= now>g_phT? now-g_phT : 0;   // the phase may have switched this tick (g_phT can be a tick ahead of now)
         int h=F<uint8_t>(g_m,M_HARD);
         if(s==ST_FINIDLE && inPh>3000 && !g_t){ act0(A_TOHARDEN); g_t=now; logf("nudged ToHardening"); }
+        // completion reads 0.999x but the game only finishes at 100%: the piece is still on the idle anvil -> one more stroke
+        if((s==ST_ANVIL||s==ST_FINISHSTROKE) && inPh>2500 && !g_t){ logf("not finished at comp=%.4f -> one more stroke",c); g_oneMore=true; g_sub=Ready; g_lastStart=0; setph(Work,"not finished yet"); }
         if(h==2 && g_t!=2){ g_t=2; logf("quench reached: q=%.3f",qual()); stop("done (confirm the result yourself)"); }
         if(inPh>60000) stop("finish timeout");
         break;
@@ -446,7 +471,7 @@ static DWORD WINAPI Init(LPVOID){
     g_flipAtPct=std::min(95,std::max(0,kc::ini_int("Options","FlipAt",50)));
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v1.1.1 (game ts 0x%08X) flip at %d%%",R.im.timestamp,g_flipAtPct);
+    logf("start v1.1.2 (game ts 0x%08X) flip at %d%%",R.im.timestamp,g_flipAtPct);
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pWorkMap=f.workmap;
@@ -456,5 +481,5 @@ static DWORD WINAPI Init(LPVOID){
     char kn[16]; logf("ready (%s at the forge)",kc::key_name(g_key.vk,kn,sizeof kn));
     return 0;
 }
-KC_PLUGIN("Theatrical AutoForge", KC_AUTHOR, 111)
+KC_PLUGIN("Theatrical AutoForge", KC_AUTHOR, 112)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){ if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); } return TRUE; }

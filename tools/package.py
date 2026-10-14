@@ -11,9 +11,14 @@ DEBUG = '; 1 = write a detailed log (for bug reports)\nDebugLog=0\n'
 
 MODS = [
     dict(folder='theatrical_autoforge', title='Theatrical AutoForge', zip='TheatricalAutoForge', dll='kcd2_autoforge.dll', data=[],
-         desc='Henry forges the chosen piece himself, stroke by stroke, through the game\'s own forge actions (F9).', ver='1.1.1',
+         desc='Henry forges the chosen piece himself, stroke by stroke, through the game\'s own forge actions (F9).', ver='1.1.2',
          ini='[Keys]\n' + KEYHELP + 'Forge=F9\n\n[Options]\n'
              '; turn the piece over once at this % completion, like a smith would (0 = only when a side is worked out)\nFlipAt=50\n' + DEBUG),
+    # the same mod with the planned flip off (FlipAt=0), forging as 1.0.0 did; same folder, so it replaces the other
+    dict(folder='theatrical_autoforge', title='Theatrical AutoForge', zip='TheatricalAutoForge-NoFlip', dll='kcd2_autoforge.dll', data=[],
+         desc='Henry forges the chosen piece himself, stroke by stroke, through the game\'s own forge actions (F9).', ver='1.1.2',
+         ini='[Keys]\n' + KEYHELP + 'Forge=F9\n\n[Options]\n'
+             '; turn the piece over once at this % completion, like a smith would (0 = only when a side is worked out)\nFlipAt=0\n' + DEBUG),
     dict(folder='theatrical_autobrew', title='Theatrical Autobrew', zip='TheatricalAutobrew', dll='kcd2_alchemy.dll', data=['alch_recipes.txt'],
          desc='Henry brews the open recipe step by step, in real time (F8). An adaptation of Autobrew by JerryYOJ.', ver='1.0.2',
          ini='[Keys]\n' + KEYHELP + 'Brew=F8\n\n[Options]\n' + DEBUG),
@@ -87,7 +92,8 @@ if __name__ == '__main__':
     dist = os.path.join(R, 'dist'); shutil.rmtree(dist, ignore_errors=True)
     stg = os.path.join(dist, 'stage')
     for m in MODS:
-        stage(m, stg)
-        zipdir(stg, m['folder'], os.path.join(dist, f"{m['zip']}-{m.get('ver', VER)}.zip"))
+        root = os.path.join(stg, m['zip'])           # one stage per archive (two archives may share a mod folder)
+        stage(m, root)
+        zipdir(root, m['folder'], os.path.join(dist, f"{m['zip']}-{m.get('ver', VER)}.zip"))
     for f in sorted(os.listdir(dist)):
         if f.endswith('.zip'): print(f, os.path.getsize(os.path.join(dist, f)))

@@ -112,7 +112,7 @@ static void hit() {
     static int grown = 0; int g = (int)(comp() * 10);                    // the map regrows as the piece takes shape
     for (; grown < g; grown++) for (int s = 0; s < 2; s++) for (int i = 0; i < MX; i++) for (int j = 0; j < MY; j++)
         g_map[s][i][j] = std::min(1.f, g_map[s][i][j] + 0.3f);
-    if (comp() >= 0.999f) { ev_idle = 0; state() = 20; } else ev_idle = g_now + 250;
+    if (comp() >= 1.f) { ev_idle = 0; state() = 20; } else ev_idle = g_now + 250;   // the game finishes only at exactly 100%
 }
 
 static void sim_step(uint64_t dt) {
