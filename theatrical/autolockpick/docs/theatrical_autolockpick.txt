@@ -1,0 +1,26 @@
+Theatrical AutoLockpick 0.1.0 (test build)
+==========================================
+
+Henry picks the lock himself. Start picking a lock, press F2, and his hand moves the pick onto the pin,
+waits until it sits, holds the turn key and follows the pin round as the lock turns, through the game's
+own pick and turn controls. Press F2 again at any time to take over.
+
+What stays real:
+- The game adds Henry's tremble (his Thievery skill, and mods such as half hand shaking) to every move.
+- The game decides whether the pick sits on the pin, wears the pick while it is off the pin, and breaks it.
+- Locks beyond Henry's skill stay hard: he lets go when the pick slips (the lock springs back, as when you
+  let go of the key) and tries again, up to MaxTries times, then hands the lock back to you.
+- After a pick breaks he stops; press F2 again to go on with the next pick.
+Nothing is written to the lock, the picks, the inventory or the skill.
+
+Requires: Kingdom Come: Deliverance II (Steam build 15693 tested), KCSE.
+Install: put the theatrical_autolockpick folder in <game>\Mods.
+
+Settings (KCSE\Plugins\kcd2_autolockpick.ini):
+  [Keys]    Pick=F2          start / stop
+  [Options] AutoStart=0      1 = start by itself on every lock (never right after a pick breaks)
+            MaxTries=6       tries per lock before handing it back
+            DebugLog=1       detailed log in kcd2_autolockpick.log (for bug reports)
+
+If the game is updated and the mod no longer recognises it, it does nothing and says so in its log.
+License: GNU GPL v3. The lock's layout follows libKCD2 by JerryYOJ (GPL v3).

@@ -1,0 +1,7 @@
+out/
+dist/
+*.dll
+*.exe
+*.pdb
+*.obj
+*.log
