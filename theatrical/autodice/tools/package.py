@@ -7,10 +7,10 @@ LICENSE = os.path.join(R, '..', '..', 'LICENSE')     # the repository's GPL v3
 AUTHOR = 'Flubbermunchkin'
 MOD = dict(folder='theatrical_autodice', title='Theatrical AutoDice', zip='TheatricalAutoDice', dll='kcd2_autodice.dll',
            ver='0.1.0', readme='theatrical_autodice',
-           desc="Henry plays his own turns at dice with the game's own actions: he picks the dice worth keeping and decides when to pass. F4 starts and stops.",
+           desc="Henry plays his own turns at dice with the game's own actions: he picks the dice worth keeping and decides when to pass. F3 starts and stops.",
            text=[],
            ini='[Keys]\n'
-               '; start/stop key: F1-F12, a letter or digit, or a symbol key such as ]\nPlay=F4\n\n'
+               '; start/stop key: F1-F12, a letter or digit, or a symbol key such as ]\nPlay=F3\n\n'
                '[Options]\n'
                '; how fast Henry plays, in percent (50 = slower and more deliberate, 200 = brisk)\nSpeedPercent=100\n'
                '; how boldly he plays, in percent (above 100 he presses on more, below 100 he banks sooner)\nRiskPercent=100\n'

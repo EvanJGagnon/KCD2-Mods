@@ -7,7 +7,7 @@
 // (with each die's own weights), scores, busts and moves the money; the mod never writes game state.
 // The choice of dice and when to stop comes from dice_engine.h (expected-value play with the real
 // weights of Henry's dice, the target score and how close the opponent is to winning).
-// Badges are left to the player. Use: sit down to dice, press F4 (kcd2_autodice.ini); F4 again stops.
+// Badges are left to the player. Use: sit down to dice, press F3 (kcd2_autodice.ini); F3 again stops.
 // Game code is found by RTTI + signature at startup (kcd2_common.h); on a mismatch nothing is hooked.
 // Log: kcd2_autodice.log next to the DLL.
 //
@@ -299,7 +299,7 @@ extern "C" __declspec(dllexport) int KC_SelfTest(HMODULE game, uintptr_t* out) {
 static HMODULE g_self = nullptr;
 static DWORD WINAPI Init(LPVOID) {
     kc::init(g_self, "kcd2_autodice");
-    g_key.vk = kc::ini_key("Play", VK_F4);
+    g_key.vk = kc::ini_key("Play", VK_F3);
     g_speed = std::min(4.0, std::max(0.25, kc::ini_int("Options", "SpeedPercent", 100) / 100.0));
     g_risk = std::min(2.0, std::max(0.5, kc::ini_int("Options", "RiskPercent", 100) / 100.0));
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }

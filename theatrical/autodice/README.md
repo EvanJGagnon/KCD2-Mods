@@ -7,7 +7,7 @@ in this repository (signature + RTTI resolution, fail-safe when the game changes
 
 | path | |
 |---|---|
-| `src/autodice.cpp` | the plugin (`kcd2_autodice.dll`), F4 starts/stops |
+| `src/autodice.cpp` | the plugin (`kcd2_autodice.dll`), F3 starts/stops |
 | `src/dice_engine.h` | scoring rules and the decision engine (portable C++, no game code) |
 | `src/kcd2_common.h` | copy of the repository's shared runtime (unchanged) |
 | `tools/dicesim.cpp` | engine tests and whole-game simulations against simple strategies |

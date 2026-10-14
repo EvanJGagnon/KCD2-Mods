@@ -28,12 +28,12 @@ INSTALL
 
 HOW TO USE
   1. Sit down to a game of dice as usual (choose your dice and badges, place the bet).
-  2. Press F4. From then on Henry plays each of his turns himself.
-     Press F4 again at any time to stop and play by hand.
+  2. Press F3. From then on Henry plays each of his turns himself.
+     Press F3 again at any time to stop and play by hand.
   3. Badges are left to you: use one by hand whenever you like; Henry carries on afterwards.
 
 SETTINGS  (Mods\theatrical_autodice\KCSE\Plugins\kcd2_autodice.ini)
-  [Keys]    Play=F4            start/stop key (F1-F12, a letter or digit, or a symbol key such as ])
+  [Keys]    Play=F3            start/stop key (F1-F12, a letter or digit, or a symbol key such as ])
   [Options] SpeedPercent=100   how fast Henry plays (50 = slow and deliberate, 200 = brisk)
             RiskPercent=100    above 100 he presses on more, below 100 he banks sooner
             DebugLog=1         1 = detailed log for bug reports
