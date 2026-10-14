@@ -1,0 +1,8 @@
+out/
+dist/
+*.dll
+*.exe
+*.pdb
+*.obj
+*.log
+*.cache.pkl
