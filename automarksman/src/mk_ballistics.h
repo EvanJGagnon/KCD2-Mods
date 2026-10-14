@@ -15,6 +15,7 @@
 #pragma once
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
 
 namespace mk {
 
@@ -170,19 +171,59 @@ inline bool fit_flight(const ShotTrack& s, float& g, float& k) {
     return g > 0.5f && g < 40.f && k >= 0 && k < 2.9f;
 }
 
-// What AutoMarksman has learned about Henry's bow and arrows this session (starts from the defaults).
+// Launch speed of the bow Henry is using, as measured from his real arrows: a few (draw time, speed)
+// points, so a bow whose speed grows with the draw is followed too.  Speed is a property of bow + arrow +
+// Henry's strength (the game computes it from those, not from a fixed number), so a shot that disagrees
+// clearly with the points measured at a similar draw time means something changed (another bow or arrow,
+// a strength change): the old points are dropped at once instead of being averaged in slowly.
+struct BowSpeed {
+    static const int N = 6;
+    int n = 0; float hold[N] = {0}, speed[N] = {0};
+    static constexpr float kNear = 0.15f;    // s: shots this close in draw time are compared
+    static constexpr float kChange = 0.08f;  // an 8% difference there means bow/arrow/strength changed
+    float at(float h) const {
+        if (n <= 0) return 0.f;
+        if (h <= hold[0]) return speed[0];
+        for (int i = 1; i < n; i++)
+            if (h <= hold[i]) { float a = (h - hold[i - 1]) / std::max(1e-4f, hold[i] - hold[i - 1]); return speed[i - 1] + a * (speed[i] - speed[i - 1]); }
+        return speed[n - 1];
+    }
+    // Returns true when the shot showed that the bow (or arrow, or strength) changed.
+    bool add(float h, float s) {
+        bool changed = false;
+        for (int i = 0; i < n; i++)
+            if (std::fabs(hold[i] - h) < kNear && std::fabs(speed[i] - s) > kChange * speed[i]) changed = true;
+        if (changed) n = 0;
+        int near = -1;
+        for (int i = 0; i < n; i++) if (std::fabs(hold[i] - h) < 0.12f && (near < 0 || std::fabs(hold[i] - h) < std::fabs(hold[near] - h))) near = i;
+        if (near < 0 && n == N) {    // full: merge into the closest point
+            near = 0; for (int i = 1; i < n; i++) if (std::fabs(hold[i] - h) < std::fabs(hold[near] - h)) near = i;
+        }
+        if (near >= 0) { speed[near] = 0.5f * (speed[near] + s); return changed; }
+        int k = n++;
+        while (k > 0 && hold[k - 1] > h) { hold[k] = hold[k - 1]; speed[k] = speed[k - 1]; k--; }
+        hold[k] = h; speed[k] = s;
+        return changed;
+    }
+};
+
+// What AutoMarksman has learned about Henry's bow and arrows (kept between sessions in a small file).
 struct Calib {
-    float speed = 55.f;       // launch speed, m/s (bow + arrow + draw)
+    float speed = 55.f;       // first-shot guess (ArrowSpeed in the .ini) until a real arrow has been measured
+    BowSpeed bow;             // measured launch speeds of the current bow
     Flight flight;            // gravity and drag
     float yawOff = 0, pitchOff = 0;   // launch direction minus camera direction at release (radians)
     V3 originOff;             // launch point minus camera position, in camera axes (right, forward, up)
     int shots = 0, fits = 0;
+    bool measured() const { return bow.n > 0; }
+    float speed_at(float hold) const { return bow.n ? bow.at(hold) : speed; }
     static float ema(float old, float v, int n) { float a = n < 1 ? 1.f : (n < 4 ? 0.5f : 0.25f); return old + a * (v - old); }
-    // A real launch: velocity and position of the arrow, camera at that moment.
-    void on_launch(const V3& pos, const V3& vel, const V3& camPos, const V3& camFwd) {
+    // A real launch: velocity and position of the arrow, camera at that moment, how long the bow was drawn.
+    // Returns true when the bow (or arrow, or strength) evidently changed.
+    bool on_launch(const V3& pos, const V3& vel, const V3& camPos, const V3& camFwd, float hold) {
         float sp = vel.len();
-        if (sp < 5.f || sp > 300.f) return;
-        speed = ema(speed, sp, shots);
+        if (sp < 5.f || sp > 300.f) return false;
+        bool changed = bow.add(hold, sp);
         float dy = wrap_pi(yaw_of(vel) - yaw_of(camFwd)), dp = pitch_of(vel) - pitch_of(camFwd);
         if (std::fabs(dy) < 0.2f && std::fabs(dp) < 0.2f) { yawOff = ema(yawOff, dy, shots); pitchOff = ema(pitchOff, dp, shots); }
         V3 f = camFwd.norm(), r = V3{f.y, -f.x, 0}.norm(), u = V3{r.y * f.z - r.z * f.y, r.z * f.x - r.x * f.z, r.x * f.y - r.y * f.x};
@@ -192,6 +233,7 @@ struct Calib {
             originOff = shots < 1 ? o : originOff + (o - originOff) * 0.5f;
         }
         shots++;
+        return changed;
     }
     void on_flight(float g, float k) {
         flight.g = ema(flight.g, g, fits); flight.k = ema(flight.k, k, fits); fits++;
@@ -200,6 +242,29 @@ struct Calib {
     V3 origin(const V3& camPos, const V3& camFwd) const {
         V3 f = camFwd.norm(), r = V3{f.y, -f.x, 0}.norm(), u = V3{r.y * f.z - r.z * f.y, r.z * f.x - r.x * f.z, r.x * f.y - r.y * f.x};
         return camPos + r * originOff.x + f * originOff.y + u * originOff.z;
+    }
+    // One-line text form, for the file the mod keeps next to its DLL.  load() accepts only sane values.
+    int save(char* out, size_t cap) const {
+        int w = std::snprintf(out, cap, "v1 %d %d %.4f %.5f %.6f %.6f %.4f %.4f %.4f %d", shots, fits, flight.g, flight.k, yawOff, pitchOff,
+                              originOff.x, originOff.y, originOff.z, bow.n);
+        for (int i = 0; i < bow.n && w > 0 && (size_t)w < cap; i++) w += std::snprintf(out + w, cap - w, " %.3f %.3f", bow.hold[i], bow.speed[i]);
+        return w;
+    }
+    bool load(const char* in) {
+        Calib c = *this; int used = 0;
+        if (std::sscanf(in, "v1 %d %d %f %f %f %f %f %f %f %d%n", &c.shots, &c.fits, &c.flight.g, &c.flight.k, &c.yawOff, &c.pitchOff,
+                        &c.originOff.x, &c.originOff.y, &c.originOff.z, &c.bow.n, &used) != 10) return false;
+        if (c.bow.n < 0 || c.bow.n > BowSpeed::N || !(c.flight.g > 0.5f && c.flight.g < 40.f) || !(c.flight.k >= 0 && c.flight.k < 3.f) ||
+            !(std::fabs(c.yawOff) < 0.2f && std::fabs(c.pitchOff) < 0.2f) || !(c.originOff.len() < 3.f)) return false;
+        const char* p = in + used;
+        for (int i = 0; i < c.bow.n; i++) {
+            int u2 = 0;
+            if (std::sscanf(p, " %f %f%n", &c.bow.hold[i], &c.bow.speed[i], &u2) != 2) return false;
+            if (!(c.bow.speed[i] > 5.f && c.bow.speed[i] < 300.f && c.bow.hold[i] >= 0.f && c.bow.hold[i] < 60.f)) return false;
+            if (i && c.bow.hold[i] < c.bow.hold[i - 1]) return false;
+            p += u2;
+        }
+        *this = c; return true;
     }
 };
 

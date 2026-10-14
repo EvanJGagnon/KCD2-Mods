@@ -2,7 +2,7 @@
 # Copy dist\theatrical_automarksman into <game>\Mods\.  Not a release: the mod is in development.
 import os, shutil, zipfile, datetime
 R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-VER = '0.1.0'
+VER = '0.2.0'
 FOLDER = 'theatrical_automarksman'
 
 def write(path, text):

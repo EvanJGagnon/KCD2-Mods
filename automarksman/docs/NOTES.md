@@ -65,9 +65,41 @@ entity +0x38. The mod hooks this slot only to read the launch, and follows the a
 (by id, through `CEntitySystem::GetEntity`) for up to 2 s to fit gravity and linear drag
 (`mk::fit_flight`). Bow power, draw time and arrow type therefore never have to be modelled.
 
-Not yet known: how speed depends on draw time (the log records hold time and speed per arrow), and
-whether the arrow leaves exactly along the camera ray (the log records the yaw/pitch difference;
-the mod learns and applies it).
+**Round 1 finding: arrows are `CArrow`, whose own vtable (0x183ECE6F0) has slot 35 = 0x2ACC880, a 5-byte
+`jmp` to `CProjectile::Launch`.** Hooking only the CProjectile vtable slot therefore never saw an arrow, the
+mod never measured a bow and kept the 55 m/s first-shot guess, which aims high with a strong bow. Only one
+thunk to Launch exists and only the CArrow vtable references it; `Launch` has no direct callers. Both slots
+are hooked now; `check_sigs.py` checks that the CArrow slot still jumps to Launch.
+
+Launch speed (for reference; the mod measures it rather than recomputing it). `C_RPGCombat` vtbl[23]
+(0x72697C) combines:
+- power 0x726C28 from Henry's strength vs the bow's required strength (RPG params `RangedWpnMinStrCoef`
+  +0x7D4, `RangedWpnMinPowerCoef` +0x7D0, `RangedWpnPowerConstA` +0x7D8: full power at or above the
+  requirement, a quadratic fall-off below it, a minimum below MinStrCoef);
+- speed 0x726A94: bow: `sqrt(2 * power * drawWeight * RangedWpnPwrToEnergy / mass)` with mass from the
+  arrow's weight (+0x108 of the ammo record) and the bow's limb resistance (`RangedWpnLimbResistanceEffect`),
+  then a stat modifier (id 0x5D) and a floor; crossbow (flag +0x140): `power * PwrToSpeed * ...`.
+So the speed depends on bow, arrow and strength, not on a fixed number. Draw time is not an input of that
+function; the mod still keeps speed per draw time (`mk::BowSpeed`) in case the launch scale depends on it.
+RPG parameter offsets were mapped from their registration (0xCEAB00..): BowChargeDurationMin/Max +0x7C4/+0x7C8.
+
+Where the projectile's source weapon is stored is not verified, so the mod cannot tell which bow is in hand
+before the first arrow; a clear speed change at a similar draw time (8%) resets the measurement at once.
+
+## Head bone
+
+As the script bind `Entity.GetBonePos` (0x37D3EF8): `CEntity` vtbl[101] GetCharacter(slot) 0x6411AC ->
+`CCharInstance` vtbl[11] GetIDefaultSkeleton 0x8A49D0 -> `CDefaultSkeleton` vtbl[7] GetJointIDByName 0x78BC4C
+("Bip01 Head", int16); `CCharInstance` vtbl[7] GetISkeletonPose 0x1AA6BC0 (this+0x698) -> `CSkeletonPose`
+vtbl[27] GetAbsJointByID 0x641250 (QuatT, t at +0x10); world = `CEntity` vtbl[91] GetSlotWorldTM(0)
+0xB7258C (Matrix34) * t. Every object is RTTI-checked before use. The bone is at the base of the skull,
+so the mod aims `HeadAboveBoneCm` (8 cm) above it; the result must lie inside the body's box.
+
+## Hostility
+
+Soul script bind `IsInCombatMode` (0x117F1E8): actor = soul's actor; in combat = `(C_Actor+0x278)->vtbl[1]()`.
+`HostileOnly=1` targets people only while that is true. `IsPublicEnemy` reads a different object and was
+not used.
 
 ## Ballistics (src/mk_ballistics.h)
 

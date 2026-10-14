@@ -1,8 +1,9 @@
-THEATRICAL AUTOMARKSMAN 0.1.0 (TEST BUILD) - Kingdom Come: Deliverance II
+THEATRICAL AUTOMARKSMAN 0.2.0 (TEST BUILD) - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 While Henry holds a drawn bow, the camera turns at a steady, human speed onto the head of the person
-(or the chest of the animal) nearest the centre of your view. It allows for the arrow's drop, for air
+in combat (or the chest of the animal) nearest the centre of your view. People who are not fighting,
+such as villagers walking by, are left alone unless you switch HostileOnly off. It allows for the arrow's drop, for air
 drag, for the bow sitting beside Henry's eye and for a target that is walking or running.
 
 That is all it does. You still draw, hold and release the bow yourself. The game flies the arrow, sways
@@ -10,10 +11,13 @@ the bow with Henry's skill and stamina, and decides whether the arrow hits. Noth
 hit is forced, and no item, arrow or stat is changed.
 
 The mod learns your bow as you shoot: each arrow Henry looses tells it the real launch speed of that
-bow and arrow, and the arrow is followed in flight to measure its drop. The first arrow of a session
-uses a default; from the second one on the aim is fitted to your bow.
+bow, arrow and draw (the game works it out from the bow, the arrow and Henry's strength), and the arrow
+is followed in flight to measure its drop. What it learned is saved in kcd2_automarksman_calibration.txt
+next to the DLL, so it is ready in your next session too. Only the very first arrow, or the first arrow
+after you change bow or arrows, uses a guess; the game tells you so on screen ("your first arrow
+measures this bow") and confirms when the bow has been measured.
 
-This is a test build. It has not been played yet.
+This is a test build.
 
 REQUIREMENTS
   - Kingdom Come Script Extender (KCSE) by JerryYOJ
@@ -39,15 +43,21 @@ SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
             MaxDistance=80        metres
             TurnSpeed=115         fastest camera turn, degrees per second
             Responsiveness=9      how quickly the remaining error is closed
-            HeadDropCm=13         aim this far below the top of a person
+            HostileOnly=1         people only when they are in combat (0 = anyone in view)
+            HeadBone=1            aim at the head bone (0 = estimate the head from the body's size)
+            HeadAboveBoneCm=8     how far above the head bone to aim (the bone is at the base of the skull)
+            HeadDropCm=13         without the bone: aim this far below the top of a person
             HandsOffMs=400        pause after you move the mouse
-            ArrowSpeed=55         arrow speed assumed before the first arrow is measured
+            ArrowSpeed=55         arrow speed guessed before the first arrow is measured
+            RememberBow=1         keep what was measured for the next session
             LeadMovingTargets=1   aim ahead of moving targets
             TargetPeople=1, TargetAnimals=1
             DebugLog=1            detailed log (kcd2_automarksman.log)
 
 KNOWN LIMITATIONS
   - It does not check whether a wall or tree is between you and the target.
+  - It cannot see which bow you hold before you shoot: after a change of bow or arrows, the first arrow
+    flies with the old bow's numbers and measures the new one.
   - Bow sway is left alone: a shaky, low-skill or tired Henry still misses.
   - Only tested statically against the Steam version 1.5.x, build 15693.
 

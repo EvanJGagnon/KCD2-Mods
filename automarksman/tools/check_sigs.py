@@ -30,6 +30,13 @@ PLAN = {
     'SIG_LOOKTICK':       ('find', 0x4415E0),
     'SIG_AIMSTART':       ('find', 0x2AAA4C0),
     'SIG_LAUNCHSTORE':    ('find', 0x2AA8906),
+    'SIG_GETCHAR':        ('slot', '.?AVCEntity@@', 101, 0x6411AC),
+    'SIG_SLOTTM':         ('slot', '.?AVCEntity@@', 91, 0xB7258C),
+    'SIG_CI_POSE':        ('slot', '.?AVCCharInstance@@', 7, 0x1AA6BC0),
+    'SIG_CI_SKEL':        ('slot', '.?AVCCharInstance@@', 11, 0x8A49D0),
+    'SIG_JOINTID':        ('slot', '.?AVCDefaultSkeleton@@', 7, 0x78BC4C),
+    'SIG_ABSJOINT':       ('slot', '.?AVCSkeletonPose@@', 27, 0x641250),
+    'SIG_COMBATMODE':     ('find', 0x117F1E8),
 }
 RTTI_ONLY = ['.?AVC_Player@entitymodule@wh@@', '.?AVC_MissileWeaponPlayerController@entitymodule@wh@@']
 
@@ -83,6 +90,12 @@ def main():
     for n in RTTI_ONLY:
         ok = vtable(n) is not None; fails += not ok
         print(f'{"ok  " if ok else "FAIL"} RTTI {n}: {hex(vtable(n)) if ok else "missing"}')
+    # CArrow vtbl[35] must be a jmp to CProjectile::Launch (arrows reach Launch only through it)
+    va, vp = vtable('.?AVCArrow@entitymodule@wh@@'), vtable('.?AVCProjectile@entitymodule@wh@@')
+    a = q(va + 8 * 35) - base if va else None; l = q(vp + 8 * 35) - base if vp else None
+    ok = a is not None and l is not None and (a == l or (mem[a] == 0xE9 and a + 5 + struct.unpack_from('<i', mem, a + 1)[0] == l))
+    fails += not ok
+    print(f'{"ok  " if ok else "FAIL"} CArrow[35] = {hex(a) if a is not None else "no vtable"} -> CProjectile::Launch {hex(l) if l is not None else "?"}')
     # globals the mod reads through rip-relative operands
     m = scan(pat(sigs['SIG_GENV_SYSTEM']))
     if m: a = m[0] + 13; print(f'     gEnv.pSystem global at {hex(a + 4 + struct.unpack_from("<i", mem, a)[0])} (expected 0x492d8c0)')
