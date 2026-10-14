@@ -18,7 +18,7 @@
 // to the camera and in which direction; the arrow is then followed in flight to measure gravity and drag.
 // The first shot of a session uses defaults (ArrowSpeed in the .ini); the next ones use what was measured.
 //
-// Use: F10 (kcd2_automarksman.ini) switches the assist on or off; it only acts while a bow is drawn.
+// Use: F4 (kcd2_automarksman.ini) switches the assist on or off; it only acts while a bow is drawn.
 // Game code is found by RTTI + signature at startup (kcd2_common.h); on a mismatch nothing is hooked.
 // Log: kcd2_automarksman.log next to the DLL.
 //
@@ -360,7 +360,7 @@ static HMODULE g_self = nullptr;
 static DWORD WINAPI Init(LPVOID) {
     kc::init(g_self, "kcd2_automarksman");
     QueryPerformanceFrequency(&g_qpf);
-    g_key.vk = kc::ini_key("Toggle", VK_F10);
+    g_key.vk = kc::ini_key("Toggle", VK_F4);
     g_on = kc::ini_int("Options", "StartEnabled", 0) != 0;
     g_cone = mk::rad((float)std::max(2, std::min(30, kc::ini_int("Options", "ConeDegrees", 10))));
     g_maxDist = (float)std::max(10, std::min(200, kc::ini_int("Options", "MaxDistance", 80)));

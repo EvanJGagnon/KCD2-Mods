@@ -13,7 +13,7 @@ MANIFEST = f'''<?xml version="1.0" encoding="utf-8"?>
   <info>
     <name>Theatrical AutoMarksman</name>
     <modid>{FOLDER}</modid>
-    <description>While a bow is drawn, the camera steadily turns onto the head of the target nearest the centre of the view, allowing for arrow drop and movement (F10). You still draw and release.</description>
+    <description>While a bow is drawn, the camera steadily turns onto the head of the target nearest the centre of the view, allowing for arrow drop and movement (F4). You still draw and release.</description>
     <author>Flubbermunchkin</author>
     <version>{VER}</version>
     <created_on>{datetime.date.today().isoformat()}</created_on>

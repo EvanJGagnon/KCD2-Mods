@@ -27,13 +27,13 @@ INSTALL
   Uninstall: delete that folder.
 
 HOW TO USE
-  1. Press F10 to switch the assist on (a notice says "AutoMarksman on"). F10 again switches it off.
+  1. Press F4 to switch the assist on (a notice says "AutoMarksman on"). F4 again switches it off.
   2. Draw the bow and bring the target roughly to the middle of the screen (within about 10 degrees).
   3. The camera settles on the aim point; release when you like.
   Moving the mouse always wins: the assist lets go while you aim by hand and picks up again shortly after.
 
 SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
-  [Keys]    Toggle=F10            on/off key
+  [Keys]    Toggle=F4             on/off key
   [Options] StartEnabled=0        1 = on from the start
             ConeDegrees=10        how far from the centre of the view a target may be
             MaxDistance=80        metres
