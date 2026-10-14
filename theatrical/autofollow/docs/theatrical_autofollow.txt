@@ -1,0 +1,57 @@
+THEATRICAL AUTOFOLLOW 0.1.0 (test build) - Kingdom Come: Deliverance II
+by Flubbermunchkin
+
+Henry can follow anyone. Normally the game only lets you follow certain NPCs (a guide, a companion,
+someone a quest wants you to follow). The game itself has a switch that lifts that limit -
+"wh_player_FollowAlwaysCanFollow: when enabled player can follow anyone" - but it is locked as a
+developer cheat, so neither the console nor user.cfg can turn it on in the normal game. This mod turns
+that switch on.
+
+Everything else is the game's own following: the same follow prompt and key, Henry walking or running
+after the person at their pace, the same way of stopping (move or press the follow key again). The mod
+adds no pathfinding of its own, moves nobody, and changes nothing in quests or your save.
+
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
+
+INSTALL
+  Manual: copy the "theatrical_autofollow" folder from this archive into <game>\Mods\
+          (you should end up with <game>\Mods\theatrical_autofollow\KCSE\Plugins\kcd2_autofollow.dll).
+  Uninstall: delete that folder.
+
+HOW TO USE
+  1. Walk up to a person who is walking somewhere.
+  2. Use the game's normal follow action on them.
+  3. Henry follows them until you move or stop following, exactly as with NPCs the game lets you follow.
+  F10 switches follow-anyone off (vanilla behaviour) and on again.
+
+SETTINGS  (Mods\theatrical_autofollow\KCSE\Plugins\kcd2_autofollow.ini)
+  [Keys]    Toggle=F10      on/off key (F1-F12, a letter or digit, or a symbol key such as ])
+  [Options] Enabled=1       1 = on when the game starts
+            Notices=1       1 = short on-screen message when the key switches it
+            DebugDraw=0     1 = also turn on the game's own follow debug drawing (for testing)
+            DebugLog=0      1 = detailed log for bug reports
+
+KNOWN ISSUES AND LIMITATIONS
+  - Test build: only checked against the Steam version of the game (build 15693).
+
+GAME UPDATES
+  The mod does not use fixed memory addresses. At startup it finds the game's switch by pattern and
+  checks it by its own name and description. If a game update changes that code, the mod turns itself
+  off and changes nothing. The log then says "this game version is not supported yet".
+
+BUG REPORTS
+  Please include kcd2_autofollow.log (next to the DLL, rewritten every session).
+
+CREDITS
+  - Warhorse Studios, whose own switch this is.
+  - JerryYOJ for KCSE and the Address Library.
+
+LICENSE
+  GNU GPL v3 (LICENSE.txt).
+
+CHANGES
+  0.1.0  - First test build.
