@@ -155,10 +155,17 @@ static void choose_point(){
     }
     if(bi<0){ g_ci=g_cj=-1; g_tx=(b.x0+b.x1)*0.5f; g_ty=(b.y0+b.y1)*0.5f; return; }
     g_ci=bi; g_cj=bj;
-    float js=g_cells[g_side][bi][bj].miss? 0.f : 0.6f;          // no wobble on a spot that has missed: it is near an edge
-    float jx=(rnd()-0.5f)*js/GX, jy=(rnd()-0.5f)*js/GY;
-    g_tx=std::min(std::max(cx(bi)+jx,b.x0),b.x1);
-    g_ty=g_2d? std::min(std::max(cy(bj)+jy,b.y0),b.y1) : F<float>(g_m,M_POS+4);
+    // The game's wear map is much finer than these cells and every hit wears the exact point struck, so pick the
+    // least-worn point inside the cell (a fully worn point, -1, is a sparkless dud even in rhythm; without rhythm any
+    // worn point is a weak stroke).  A cell that has missed is near an edge: stay closer to its middle.
+    float span=(g_cells[g_side][bi][bj].miss? 0.3f : 0.7f)/GX, spany=(g_cells[g_side][bi][bj].miss? 0.3f : 0.7f)/GY;
+    float bw=-9.f, bx=cx(bi), by=g_2d? cy(bj) : F<float>(g_m,M_POS+4);
+    for(int u=0;u<5;u++) for(int v=0;v<(g_2d?5:1);v++){
+        float x=std::min(std::max(cx(bi)+(u/4.f-0.5f)*span,b.x0),b.x1);
+        float y=g_2d? std::min(std::max(cy(bj)+(v/4.f-0.5f)*spany,b.y0),b.y1) : by;
+        float w=workAt(x,y)+rnd()*0.05f;                          // ties (an untouched side reads 0 everywhere): any
+        if(w>bw){ bw=w; bx=x; by=y; } }
+    g_tx=bx; g_ty=by;
 }
 // ---- seeded paths for known 2D pieces (from a manual forge trace); stepped ~0.1 per stroke, ping-pong ----
 struct WP{ float x,y; };
@@ -363,7 +370,9 @@ static void tick(float dt){
         break;
     }
     case GoAnvil:
-        if(s==ST_ANVIL){ Bounds b=bounds(); g_2d=is2d(b); g_sub=Ready; g_lastStart=0; g_pass++; g_passStrokes=0; setph(Work,"at anvil"); }
+        if(s==ST_ANVIL){ Bounds b=bounds(); g_2d=is2d(b); g_sub=Ready; g_lastStart=0; g_pass++; g_passStrokes=0;
+            g_fresh=RHYTHM_STROKES;                    // a new anvil pass starts without rhythm: aim at fresh metal first
+            setph(Work,"at anvil"); }
         else if(s==ST_FORGE && inPh>4000 && !g_t){ act0(A_TOANVIL); g_t=now; logf("retry ToAnvil"); }
         else if(inPh>20000) stop("anvil transition timeout");
         break;

@@ -105,6 +105,7 @@ static void hit() {
     bool on = on_piece(x, y) && ztemp(z) > 600.f;
     float w = g_map[g_side][cxi(x)][cyi(g_1d ? 0.f : y)];
     float eff = on ? std::min(1.f, std::max(0.f, 0.7f + 0.7f * w + (r_on ? 0.8f : 0.f))) : 0.f;
+    eff = std::min(eff, (w + 1.f) * 6.5f);              // a worn-out point is a dud even in rhythm (in game: work -0.97 -> 0.17, -1 -> 0)
     comp() = std::min(1.f, comp() + 0.02f * eff); qual() -= 0.017f * powf(1.f - eff, 1.3f); charge() = eff;
     if (on) { g_hitsN++; int i = cxi(x), j = cyi(g_1d ? 0.f : y);
         for (int di = -1; di <= 1; di++) for (int dj = -1; dj <= 1; dj++) { int a = i + di, b = j + dj; if (a < 0 || a >= MX || b < 0 || b >= MY) continue;
@@ -114,7 +115,7 @@ static void hit() {
     static int grown = 0; int g = (int)(comp() * 10);                    // the map regrows as the piece takes shape
     for (; grown < g; grown++) for (int s = 0; s < 2; s++) for (int i = 0; i < MX; i++) for (int j = 0; j < MY; j++)
         g_map[s][i][j] = std::min(1.f, g_map[s][i][j] + 0.3f);
-    if (comp() >= 1.f) { ev_idle = 0; state() = 20; } else ev_idle = g_now + 250;   // the game finishes only at exactly 100%
+    if (comp() >= 0.99995f) { ev_idle = 0; state() = 20; } else ev_idle = g_now + 250;   // the game finishes only at 100% (allowing float rounding)
 }
 
 static void sim_step(uint64_t dt) {
