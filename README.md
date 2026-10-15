@@ -15,11 +15,11 @@ Native (C++) mods for **Kingdom Come: Deliverance II**, loaded by the
 | **[Theatrical AutoForge](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3743)** | Henry forges the chosen piece himself, stroke by stroke: heating, bellows, hammering in rhythm, turning it over halfway (a NoFlip download skips that), reheating and quench - all through the game's own forge actions. | F9 |
 | **[Theatrical Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3744)** | Henry brews the recipe open in the alchemy book on screen, step by step and in real time. **An adaptation of [Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3394) by JerryYOJ** (see below). | F8 |
 | **[Theatrical AutoSharpening](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3802)** | Henry sharpens the weapon himself at the grindstone: pedalling, holding the angle and working the edge end to end until it is at 100%, then gets up. Idea by [cpk](https://www.nexusmods.com/profile/cpk). | F7 |
-| **Theatrical AutoLockpick** (new) | Henry picks the lock himself with the game's own pick and turn controls: his tremble, pick wear and broken picks stay. | F2 |
-| **Theatrical AutoDice** (new) | Henry plays his own turns at dice: he sets aside the dice worth keeping and decides when to pass. The game throws and scores. | F3 |
-| **Theatrical AutoMarksman** (new) | While a bow, crossbow or hand cannon is aimed, the camera turns onto the head of the target nearest the centre, allowing for drop and movement; nobody behind cover. You still draw and release. | F4 |
-| **Theatrical AutoPickpocket** (new) | Henry lets go of the pickpocket charge at a safe moment and plays the item grid, keeping every risk. | [ |
-| **Theatrical AutoFollow** (new) | Henry can follow anyone with the game's own follow action, as if they were a guide. | ] |
+| **[Theatrical AutoLockpick](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3820)** | Henry picks the lock himself with the game's own pick and turn controls: his tremble, pick wear and broken picks stay. | F2 |
+| **[Theatrical AutoDice](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3821)** | Henry plays his own turns at dice: he sets aside the dice worth keeping and decides when to pass. The game throws and scores. | F3 |
+| **[Theatrical AutoMarksman](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3824)** | While a bow, crossbow or hand cannon is aimed, the camera turns onto the head of the target nearest the centre, allowing for drop and movement. Experimental: partial cover can prevent locking. You still draw and release. | F4 |
+| **[Theatrical AutoPickpocket](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3822)** | Henry lets go of the pickpocket charge at a safe moment and plays the item grid, keeping every risk. | [ |
+| **[Theatrical AutoFollow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3823)** | Henry can follow anyone with the game's own follow action, as if they were a guide. | ] |
 
 ![Horse Route Follow - route drawn on the map](media/horse_route_follow_map.jpg)
 
@@ -31,10 +31,16 @@ Native (C++) mods for **Kingdom Come: Deliverance II**, loaded by the
 ## Download and install
 
 Downloads, install instructions and support are on Nexus Mods:
-[Horse Route Follow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3742) -
-[Theatrical AutoForge](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3743) -
-[Theatrical Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3744) -
-[Theatrical AutoSharpening](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3802)
+- [Horse Route Follow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3742)
+- [Theatrical AutoForge](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3743)
+- [Theatrical Autobrew](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3744)
+- [Theatrical AutoSharpening](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3802)
+- [Theatrical AutoLockpick](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3820)
+- [Theatrical AutoDice](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3821)
+- [Theatrical AutoMarksman](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3824)
+- [Theatrical AutoPickpocket](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3822)
+- [Theatrical AutoFollow](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3823)
+
 Each mod needs:
 
 - [Kingdom Come Script Extender (KCSE)](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332) by JerryYOJ
@@ -92,13 +98,13 @@ python tools\package.py
 - `out\dev\`, `theatrical\<mod>\out\dev\` - development builds (`/DKC_DEVTOOLS`: self-test exports, horse-mod live reload) plus `selftest.exe`, `routetest.exe` and the simulators
 - `dist\` - the mod archives, `SHA256SUMS.txt` and `RELEASE_CONTENTS.txt` (every file of every archive). `package.py`
   also audits them: required files present, manifest and README versions match, no hotkey used twice, `DebugLog=0`,
-  and nothing that looks like a game asset or a build leftover. `TheatricalAutoMarksman-ExperimentalCrossbow-*.zip`
-  is the optional crossbow test build (detailed crossbow log on) and is uploaded by CI as a separate artifact.
+  and nothing that looks like a game asset or a build leftover. AutoMarksman has one experimental
+  archive supporting bows, crossbows and hand cannons; enable optional diagnostics in its ini.
 
 `build.bat` expects Visual Studio 2022 Community; for another edition or the Build Tools, set `KC_VCVARS`
 to its `vcvars64.bat` first. Every push is also built on GitHub Actions
 ([`.github/workflows/build.yml`](.github/workflows/build.yml)): a Windows runner runs `build.bat` and
-`tools\package.py`, runs the simulators and attaches the mod archives, the experimental archive and the
+`tools\package.py`, runs the simulators and attaches the mod archives and the
 development builds to the run.
 
 Self-test against a game DLL:

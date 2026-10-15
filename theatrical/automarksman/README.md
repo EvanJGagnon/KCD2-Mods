@@ -1,6 +1,6 @@
 # Theatrical AutoMarksman
 
-KCSE plugin for Kingdom Come: Deliverance II: while a bow, crossbow or hand cannon is aimed, the camera turns onto the
+Experimental KCSE plugin for Kingdom Come: Deliverance II: while a bow, crossbow or hand cannon is aimed, the camera turns onto the
 head of the target nearest the centre of the view, using the weapon's live launch pose and the game's own
 projectile speed, gravity and drag. F4 toggles. Each weapon family can be switched off in the ini (`Bows`, `Crossbows`, `HandCannons`).
 
@@ -9,7 +9,7 @@ projectile speed, gravity and drag. F4 toggles. Each weapon family can be switch
 | `src/automarksman.cpp` | the plugin (`kcd2_automarksman.dll`): signatures, hooks, targeting, steering, notices |
 | `src/mk_ballistics.h`, `mk_pose.h`, `mk_target.h`, `mk_visibility.h` | portable aim maths, servo, target policy, line of sight |
 | `src/kcd2_common.h` | copy of the repository's shared runtime (unchanged) |
-| `kcd2_automarksman.ini` | the release settings (the optional Experimental Crossbow archive turns on `CrossbowPoseDiagnostics` and `DebugLog`) |
+| `kcd2_automarksman.ini` | release settings for all three weapons; diagnostics can be switched on in the ini |
 | `localization/` | the ON/OFF message table packed into `Localization\*_xml.pak` |
 | `tools/marksim.cpp` | offline ballistics and steering tests (run by `build.bat`) |
 | `tools/check_sigs.py` | resolves every signature against a WHGame.dll without Windows (`pip install pefile`) |
