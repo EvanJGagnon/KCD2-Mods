@@ -968,7 +968,10 @@ static void tick() {
     steer(now, dt, look, camPos, camFwd);
 }
 
+static volatile LONG g_ssTickOnce = 0;
 static void* SsUpdateHook(void* self, void* a, void* b, void* c) {
+    if (InterlockedCompareExchange(&g_ssTickOnce, 1, 0) == 0)
+        KC_DLOG("first CScriptSystem::Update tick seen; gameplay hook active");
     void* r = G.ssUpdate(self, a, b, c);
     if (!g_dead) {
         __try { tick(); }
@@ -987,6 +990,22 @@ static void* SsUpdateHook(void* self, void* a, void* b, void* c) {
     const char* line = (const char*)InterlockedExchangePointer((void* volatile*)&g_notice, nullptr);
     if (line && G.ssExec) { __try { G.ssExec(self, line, strlen(line), "AutoMarksman", nullptr); } __except (EXCEPTION_EXECUTE_HANDLER) { G.ssExec = nullptr; } }
     return r;
+}
+
+// Audit ONLY: if another plugin replaces the shared slot later, we do not blindly
+// overwrite it (that could introduce a cyclic chain). Record the ownership and tick
+// count for diagnosis, even when nobody presses F4.
+static DWORD WINAPI ScriptUpdateAudit(LPVOID) {
+    Sleep(30000);
+    for (int i = 0; i < 2; ++i) {
+        uintptr_t p = G.vtSS ? ((uintptr_t*)G.vtSS)[1] : 0;
+        logf("script-update audit (+%ds): first-tick=%s, slot=%s (other mods may chain)",
+             i ? 90 : 30,
+             InterlockedCompareExchange(&g_ssTickOnce, 0, 0) ? "seen" : "NOT SEEN",
+             p == (uintptr_t)&SsUpdateHook ? "ours" : "another plugin");
+        if (i == 0) Sleep(60000);
+    }
+    return 0;
 }
 
 // ---------------- resolve ----------------
@@ -1123,7 +1142,12 @@ static DWORD WINAPI Init(LPVOID) {
     g_ctl.gate.settle = std::max(0, std::min(2000, kc::ini_int("Options", "SettleMs", 200))) / 1000.f;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.6.0 LOCAL DIAGNOSTIC 2 (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.6.0 LOCAL DIAGNOSTIC 3 (game ts 0x%08X)", R.im.timestamp);
+    // Other Theatrical mods and Horse Route Follow also install on CScriptSystem::Update.
+    // Their init threads are concurrent, so installing immediately after KCSE load may
+    // leave our hook underneath a later non-chaining hook. Let other plugins settle first.
+    // This is still well before any save loads on the observed game (previously ~60s).
+    Sleep(3000);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     G.fwGlobal = f.fwGlobal; G.sysGlobal = f.sysGlobal;
@@ -1139,7 +1163,30 @@ static DWORD WINAPI Init(LPVOID) {
     load_calib();
     kc::write_ptr(&((void**)G.vtProjectile)[35], (void*)&LaunchHook);
     kc::write_ptr(&((void**)G.vtArrow)[35], (void*)&LaunchHookArrow);
+    // Use the live slot at install time; another mod can hook between resolve and install.
+    // Chain to the latest predecessor, but never recursively chain to ourselves.
+    uintptr_t liveSS = ((uintptr_t*)G.vtSS)[1];
+    if (liveSS != (uintptr_t)&SsUpdateHook && liveSS != f.ssUpdate) {
+        if (R.im.in_image(liveSS)) {
+            if (!R.verify("latest CScriptSystem::Update", liveSS, SIG_SS_UPDATE)) {
+                logf("disabled: latest script-update slot was changed to unrecognized game code");
+                return 0;
+            }
+        } else if (!kc::readable(liveSS, 1)) {
+            logf("disabled: latest script-update hook is not readable");
+            return 0;
+        }
+        G.ssUpdate = (SsUpdate_t)liveSS;
+        logf("chaining to another plugin's newer script-update hook");
+    }
     kc::write_ptr(&((void**)G.vtSS)[1], (void*)&SsUpdateHook);
+    if (((void**)G.vtSS)[1] != (void*)&SsUpdateHook) {
+        logf("disabled: script-update hook installation did not stick"); return 0;
+    }
+    logf("script-update hook installed after 3 s startup settlement; first gameplay tick pending");
+    if (g_on) sway_hook(true);  // StartEnabled=1 must apply native-sway scaling too, without an F4 press
+    HANDLE audit = CreateThread(nullptr, 0, ScriptUpdateAudit, nullptr, 0, nullptr);
+    if (audit) CloseHandle(audit);
     char kn[16];
     logf("ready: %s switches the assist %s (now %s); cone %.0f deg, range %.0f m, turn speed %.0f deg/s, first-shot arrow speed %.0f m/s; %s, %s",
          kc::key_name(g_key.vk, kn, sizeof kn), "on/off", g_on ? "ON" : "OFF", mk::deg(g_policy.cone), g_maxDist, mk::deg(g_steer.maxRate), g_cal.speed,
