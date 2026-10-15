@@ -116,6 +116,12 @@ def main():
         if m and mem[m[0] + off] == 0xE8: tg = m[0] + off + 5 + struct.unpack_from('<i', mem, m[0] + off + 1)[0]
         ok = tg == ref and (sg is None or at(pat(sigs[sg]), tg)); fails += not ok
         print(f'{"ok  " if ok else "FAIL"} preview call {nm}: {hex(tg) if tg is not None else "?"}')
+    # physics line of sight (RequireClearShot): the game's own ballistic ray caller, its world global and wrapper
+    m = scan(pat(sigs['SIG_PHYS_REF'])); ok = len(m) == 1; tg = None
+    if ok and mem[m[0] + 0x63] == 0xE8: tg = m[0] + 0x63 + 5 + struct.unpack_from('<i', mem, m[0] + 0x64)[0]
+    ok = ok and tg == 0x4846E4 and at(pat(sigs['SIG_PHYS_RAY']), tg); fails += not ok
+    print(f'{"ok  " if ok else "FAIL"} physics ray caller {hex(m[0]) if m else "?"} -> wrapper {hex(tg) if tg is not None else "?"} (expected 0x4846e4)')
+    if m: a = m[0] + 3; print(f'     gEnv->pPhysicalWorld global at {hex(a + 4 + struct.unpack_from("<i", mem, a)[0])} (expected 0x492d830)')
     # globals the mod reads through rip-relative operands
     m = scan(pat(sigs['SIG_GENV_SYSTEM']))
     if m: a = m[0] + 13; print(f'     gEnv.pSystem global at {hex(a + 4 + struct.unpack_from("<i", mem, a)[0])} (expected 0x492d8c0)')

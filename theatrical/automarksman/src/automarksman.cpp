@@ -123,6 +123,7 @@ static const uintptr_t A_LOADOUT = 0x280, A_SOUL = 0x668, LO_BOW = 0x40, LO_AMMO
 static const uintptr_t SE_MAIN = 0x50, MAIN_SUB = 0x98;
 static const uintptr_t FIRING_FIRED = 0xA4;        // C_ActorActionShootingFiring: 1 once "firearrow" launched the shot
 static const uintptr_t MW_FAMILY = 0x28;           // C_MissileWeaponPlayerController: CryString "combat_bow" / "combat_crossbow" / "combat_gun"
+#define MK_VERSION "1.0.0"
 enum { FAM_UNKNOWN, FAM_BOW, FAM_CROSSBOW, FAM_GUN };
 static const char* const FAM_NAME[4] = {"weapon", "bow", "crossbow", "hand cannon"};
 static const uintptr_t PR_AMMOPARAMS = 0x68, AP_PARTICLE = 0x88, PP_AIRRES = 0x24, PP_GRAVITY = 0x44;   // CProjectile -> ammo params -> pe_params_particle                               // gEnv.pEntitySystem (+0xA0) = &gEnv.pSystem (+0xC0) - 0x20
@@ -195,6 +196,9 @@ static uintptr_t g_subPtr = 0; static int g_family = FAM_UNKNOWN, g_familyLogged
 // the hook calls the game's own function and scales the look rate it returns (0 = no sway, 1 = vanilla).
 typedef uint8_t* (*AimSway_t)(void* self, uint8_t* out);
 static AimSway_t g_swayOrig = nullptr; static uintptr_t* g_swaySlot = nullptr; static bool g_swayHooked = false;
+// Which weapon families the assist steers for (Bows / Crossbows / HandCannons).  Crossbows are experimental and
+// off in the stable release: with a family off, the camera and the game's sway are left exactly as vanilla.
+static bool g_famOn[4] = {true, true, false, true};
 static float g_swayStrength[4] = {0.25f, 0.25f, 0.25f, 0.25f};  // per family (SwayStrength, SwayStrengthBow/Crossbow/Gun)
 static volatile float g_swayScale = 1.f; static float g_swayPeakRaw = 0;
 static void* g_curAmmo = nullptr;
@@ -1028,19 +1032,21 @@ static void tick() {
     if (aiming) {
         update_weapon(now);
         int fam = weapon_family(ctrl);
+        bool famOn = g_famOn[fam];
         if (fam != g_familyLogged) {
             g_familyLogged = fam;
-            if (fam != FAM_UNKNOWN) logf("weapon: %s", FAM_NAME[fam]);
-            if (g_swaySlot && fam != FAM_UNKNOWN) logf("   native sway: %.0f%% of the game's (SwayStrength%s)", g_swayStrength[fam] * 100.f,
+            if (fam != FAM_UNKNOWN) logf("weapon: %s%s", FAM_NAME[fam], famOn ? "" : " - the assist is off for this weapon (see [Options] in the .ini)");
+            if (g_swaySlot && fam != FAM_UNKNOWN && famOn) logf("   native sway: %.0f%% of the game's (SwayStrength%s)", g_swayStrength[fam] * 100.f,
                                                        fam == FAM_BOW ? "Bow" : fam == FAM_CROSSBOW ? "Crossbow" : "Gun");
         }
-        g_family = fam; g_swayScale = g_swayStrength[fam];
+        g_family = fam; g_swayScale = famOn ? g_swayStrength[fam] : 1.f;
         // Other weapons keep their proven tracking. The crossbow's slow IK
         // drives a corrective feedback loop when its pose velocity is fed
         // straight back into look input each frame.
         g_ctl.swayRateGain = fam == FAM_CROSSBOW ? g_crossbowRateGain : 1.f;
         g_policy.sticky = fam == FAM_CROSSBOW;
         crossbow_diagnostic(now, look, camPos, camFwd, fam);
+        if (!famOn) { if (g_lock) reset_aim(); return; }
     } else {
         if (wasAiming && g_swayPeakRaw > 0 && g_swayHooked)
             KC_DLOG("native sway this aim: peak %.1f deg/s from the game, %.1f deg/s after SwayStrength", mk::deg(g_swayPeakRaw), mk::deg(g_swayPeakRaw * g_swayScale));
@@ -1201,6 +1207,9 @@ static DWORD WINAPI Init(LPVOID) {
     g_key.vk = kc::ini_key("Toggle", VK_F4);
     g_notices = kc::ini_int("Options", "Notices", 1) != 0;
     g_crossbowDiag = kc::ini_int("Options", "CrossbowPoseDiagnostics", 0) != 0;
+    g_famOn[FAM_BOW] = kc::ini_int("Options", "Bows", 1) != 0;
+    g_famOn[FAM_CROSSBOW] = kc::ini_int("Options", "Crossbows", 0) != 0;      // experimental
+    g_famOn[FAM_GUN] = kc::ini_int("Options", "HandCannons", 1) != 0;
     g_on = kc::ini_int("Options", "StartEnabled", 0) != 0;
     g_policy.cone = mk::rad((float)std::max(2, std::min(30, kc::ini_int("Options", "ConeDegrees", 10))));
     g_maxDist = (float)std::max(10, std::min(200, kc::ini_int("Options", "MaxDistance", 80)));
@@ -1234,7 +1243,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_ctl.gate.settle = std::max(0, std::min(2000, kc::ini_int("Options", "SettleMs", 200))) / 1000.f;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.6.0 LOCAL DIAGNOSTIC 7 (stable crossbow target and feedback) (game ts 0x%08X)", R.im.timestamp);
+    logf("start v%s (game ts 0x%08X)", MK_VERSION, R.im.timestamp);
     // Other Theatrical mods and Horse Route Follow also install on CScriptSystem::Update.
     // Their init threads are concurrent, so installing immediately after KCSE load may
     // leave our hook underneath a later non-chaining hook. Let other plugins settle first.
@@ -1284,15 +1293,18 @@ static DWORD WINAPI Init(LPVOID) {
     logf("ready: %s switches the assist %s (now %s); cone %.0f deg, range %.0f m, turn speed %.0f deg/s, first-shot arrow speed %.0f m/s; %s, %s",
          kc::key_name(g_key.vk, kn, sizeof kn), "on/off", g_on ? "ON" : "OFF", mk::deg(g_policy.cone), g_maxDist, mk::deg(g_steer.maxRate), g_cal.speed,
          g_hostileOnly ? "people only when in combat" : "anyone you aim at", g_headBone ? "head bone" : "head from box");
-    logf("local diagnostics: crossbow firing pose %s, in-game notices %s", g_crossbowDiag ? "ON" : "OFF", g_notices ? "ON" : "OFF");
+    logf("weapons: bows %s, crossbows %s (experimental), hand cannons %s; in-game notices %s; crossbow pose diagnostics %s",
+         g_famOn[FAM_BOW] ? "on" : "off", g_famOn[FAM_CROSSBOW] ? "on" : "off", g_famOn[FAM_GUN] ? "on" : "off",
+         g_notices ? "on" : "off", g_crossbowDiag ? "on" : "off");
     logf("visibility: %s, physics ray = %s, solid props/terrain/rigid blockers; max 8 candidates per choice",
          g_losEnabled ? "required" : "not required", G.physRay && G.physicsGlobal ? "verified" : "unavailable");
     logf("targets: people %s, animals %s, horses %s, dogs %s; impact marker %s", g_policy.people ? "yes" : "no", g_policy.animals ? "yes" : "no",
          g_policy.horses ? "yes" : "no", g_policy.dogs ? "yes" : "no", g_marker ? "on" : "off");
     logf("native aim sway while the assist is on: bow %.0f%%, crossbow %.0f%%, hand cannon %.0f%% of the game's%s", g_swayStrength[1] * 100.f, g_swayStrength[2] * 100.f,
          g_swayStrength[3] * 100.f, g_swaySlot ? "" : " (NOT available on this game version)");
-    logf("crossbow feedback: %.0f%% pose-rate compensation; targets sticky until mouse moves or LOS is lost",
-         g_crossbowRateGain * 100.f);
+    if (g_famOn[FAM_CROSSBOW])
+        logf("crossbow feedback: %.0f%% pose-rate compensation; targets sticky until mouse moves or LOS is lost",
+             g_crossbowRateGain * 100.f);
     logf("camera: follows the bow's slow sway (tracking filter %.0f ms, tremor filtered out), does not chase the last %.0f cm, steers only after the bow has been steady for %.0f ms",
          g_ctl.swayTau * 1000.f, g_ctl.glide.tol * 100.f, g_ctl.gate.settle * 1000.f);
     logf("arrow path: %s", g_live ? "from the bow's live arrow joint and the game's speed formula (BowPose=1)" : "from the camera plus measured offsets (BowPose=0)");
