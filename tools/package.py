@@ -18,8 +18,13 @@ LANGS = ['Chineses', 'Chineset', 'Czech', 'English', 'French', 'German', 'Italia
 def th(name):   # out\ and docs\ of a Theatrical Collection mod under theatrical\<name>\
     return dict(out=os.path.join(TH, name, 'out'), docs=os.path.join(TH, name, 'docs'))
 
-def automarksman_ini():
-    with open(os.path.join(TH, 'automarksman', 'kcd2_automarksman.ini'), encoding='utf-8') as f: return f.read().replace('\r\n', '\n')
+def automarksman_ini(experimental):
+    with open(os.path.join(TH, 'automarksman', 'kcd2_automarksman.ini'), encoding='utf-8') as f: s = f.read().replace('\r\n', '\n')
+    if experimental:    # the crossbow test build: the detailed crossbow log on
+        for a, b in (('CrossbowPoseDiagnostics=0', 'CrossbowPoseDiagnostics=1'), ('DebugLog=0', 'DebugLog=1')):
+            assert s.count('\n' + a + '\n') == 1, a
+            s = s.replace('\n' + a + '\n', '\n' + b + '\n')
+    return s
 
 def automarksman_text():
     with open(os.path.join(TH, 'automarksman', 'localization', 'text_ui_theatrical_automarksman.xml'), encoding='utf-8') as f: x = f.read()
@@ -103,7 +108,17 @@ MODS = [
              "; 1 = turn on the game's own follow debug drawing too (for testing; may show nothing in the release game)\nDebugDraw=0\n" + DEBUG),
     dict(th('automarksman'), folder='theatrical_automarksman', title='Theatrical AutoMarksman', zip='TheatricalAutoMarksman',
          dll='kcd2_automarksman.dll', data=[], ver='1.0.0', key='Toggle', desc=AM_DESC,
-         text=automarksman_text(), ini=automarksman_ini()),
+         text=automarksman_text(), ini=automarksman_ini(False)),
+    # optional file: the same DLL and folder (it replaces the main one) with the crossbow log on, clearly marked
+    dict(th('automarksman'), folder='theatrical_automarksman', title='Theatrical AutoMarksman (Experimental Crossbow)',
+         zip='TheatricalAutoMarksman-ExperimentalCrossbow', dll='kcd2_automarksman.dll', data=[], ver='1.0.0', key='Toggle',
+         variant_of='TheatricalAutoMarksman', experimental=True,
+         desc=AM_DESC + ' EXPERIMENTAL crossbow test build: the detailed crossbow log is on.',
+         note='This optional download is the same mod with CrossbowPoseDiagnostics=1 and DebugLog=1 in the .ini, for\n'
+              'testing crossbows. Crossbow aiming works reasonably well but has had less testing than bows and hand\n'
+              'cannons, and it shares the partial-cover limitation (see KNOWN ISSUES). It replaces the main download\n'
+              '(same folder): install the main download again to go back. Please send kcd2_automarksman.log with reports.',
+         text=automarksman_text(), ini=automarksman_ini(True)),
 ]
 
 def manifest(m):
@@ -132,6 +147,9 @@ def stage(m, root):
     if m['ini']: write(os.path.join(p, m['dll'].replace('.dll', '.ini')), m['ini'])
     with open(os.path.join(m.get('docs', os.path.join(R, 'docs')), m.get('readme', m['folder']) + '.txt'), encoding='utf-8') as f:
         readme = f.read().replace('\r\n', '\n')
+    if m.get('experimental'):                      # say so right under the title
+        title, by, rest = readme.split('\n', 2)
+        readme = title + '\n' + by + '\n\n*** EXPERIMENTAL CROSSBOW TEST DOWNLOAD ***\n' + m['note'] + '\n' + rest
     write(os.path.join(d, 'README.txt'), readme)
     shutil.copy(os.path.join(R, 'LICENSE'), os.path.join(d, 'LICENSE.txt'))
     localization(m, d)
@@ -194,12 +212,12 @@ def audit(dist):
                 if not k: errs.append(f"{zipname(m)}: no {m['key']}= hotkey in the ini")
                 elif not m.get('variant_of'): keys.setdefault(k.group(1).upper(), []).append(m['zip'])
                 dl = re.search(r'^DebugLog=(\d)', ini, re.M)
-                if (not dl or dl.group(1) != '0'): errs.append(f'{zipname(m)}: stable ini must say DebugLog=0')
+                if not m.get('experimental') and (not dl or dl.group(1) != '0'): errs.append(f'{zipname(m)}: stable ini must say DebugLog=0')
                 if m['folder'] == 'theatrical_automarksman':
                     for opt in ('Bows', 'HandCannons', 'Crossbows'):
                         v = re.search(r'^' + opt + r'=(\d)', ini, re.M)
                         if not v or v.group(1) != '1': errs.append(f'{zipname(m)}: {opt}= must be 1')
-                    if not re.search(r'^CrossbowPoseDiagnostics=0', ini, re.M): errs.append(f'{zipname(m)}: CrossbowPoseDiagnostics= must be 0')
+                    if not re.search(r'^CrossbowPoseDiagnostics=' + ('1' if m.get('experimental') else '0'), ini, re.M): errs.append(f'{zipname(m)}: wrong CrossbowPoseDiagnostics= setting')
     for k, who in keys.items():
         if len(who) > 1: errs.append(f'hotkey {k} is used by {", ".join(who)}')
     return errs, keys
@@ -208,7 +226,7 @@ def summary(dist):
     lines = [f'KCD2 mods - release archives ({datetime.date.today().isoformat()})', '']
     for m in MODS:
         z = os.path.join(dist, zipname(m))
-        lines.append(f"{zipname(m):58} {m['title']} {m['ver']}"
+        lines.append(f"{zipname(m):58} {m['title']} {m['ver']}{'  [EXPERIMENTAL]' if m.get('experimental') else ''}"
                      f"{'  (variant of ' + m['variant_of'] + ')' if m.get('variant_of') else ''}")
         with zipfile.ZipFile(z) as zf:
             for i in zf.infolist(): lines.append(f'    {i.file_size:>9}  {i.filename}')

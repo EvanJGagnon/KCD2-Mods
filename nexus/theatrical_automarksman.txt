@@ -7,8 +7,8 @@ Gameplay
 VERSION
 1.0.0
 
-SUMMARY (288/350 characters)
-While Henry aims a bow, crossbow or hand cannon, the camera turns gently onto the head of the target nearest the centre of the view, allowing for drop and movement, using the weapon's real launch pose. You still draw and release; the game decides the hit. Nobody behind cover. F4 toggles.
+SUMMARY (307/350 characters)
+While Henry aims a bow, crossbow or hand cannon, the camera turns gently onto the head of the target nearest the centre of the view, allowing for drop and movement, using the weapon's real launch pose. You still draw and release; the game decides the hit. Targets behind solid cover are skipped. F4 toggles.
 
 DESCRIPTION (BBCode)
 [size=4][b]Theatrical AutoMarksman[/b][/size]
@@ -33,6 +33,9 @@ It only starts turning once the weapon is drawn and steady (never while it is ra
 
 [b]Crossbows[/b]
 A crossbow is aimed the same way, through its own live firing pose. Its animation moves more than a bow, so the camera follows only part of that motion and keeps the target until you move the mouse or lose sight of it. Set Crossbows=0 to leave crossbows completely to you.
+
+[b]Optional file: Experimental Crossbow[/b]
+Crossbow aiming works reasonably well but has had less testing than bows and hand cannons. The optional [b]Experimental Crossbow[/b] file is the same mod with the detailed crossbow log on (CrossbowPoseDiagnostics=1, DebugLog=1), for anyone who wants to help test it. Install it instead of the main file (same folder) and send kcd2_automarksman.log with reports; the partial-cover limitation below applies to it too.
 
 [b]Requirements[/b]
 [list]
@@ -95,6 +98,10 @@ Main file: TheatricalAutoMarksman-1.0.0.zip
   Name: Theatrical AutoMarksman
   Version: 1.0.0
   Description: Aim assist for bows, crossbows and hand cannons through the weapon's real launch pose (F4).
+Optional file: TheatricalAutoMarksman-ExperimentalCrossbow-1.0.0.zip
+  Name: Theatrical AutoMarksman - Experimental Crossbow
+  Version: 1.0.0
+  Description: EXPERIMENTAL crossbow test build: the same mod with the detailed crossbow log on. Install instead of the main file (same folder). Crossbow aiming is less tested than bows and hand cannons and shares the partial-cover limitation; please send kcd2_automarksman.log with reports.
 
 CHANGELOG (Nexus "Logs" tab)
 1.0.0 - First release: bows, crossbows and hand cannons.

@@ -92,12 +92,13 @@ python tools\package.py
 - `out\dev\`, `theatrical\<mod>\out\dev\` - development builds (`/DKC_DEVTOOLS`: self-test exports, horse-mod live reload) plus `selftest.exe`, `routetest.exe` and the simulators
 - `dist\` - the mod archives, `SHA256SUMS.txt` and `RELEASE_CONTENTS.txt` (every file of every archive). `package.py`
   also audits them: required files present, manifest and README versions match, no hotkey used twice, `DebugLog=0`,
-  and nothing that looks like a game asset or a build leftover.
+  and nothing that looks like a game asset or a build leftover. `TheatricalAutoMarksman-ExperimentalCrossbow-*.zip`
+  is the optional crossbow test build (detailed crossbow log on) and is uploaded by CI as a separate artifact.
 
 `build.bat` expects Visual Studio 2022 Community; for another edition or the Build Tools, set `KC_VCVARS`
 to its `vcvars64.bat` first. Every push is also built on GitHub Actions
 ([`.github/workflows/build.yml`](.github/workflows/build.yml)): a Windows runner runs `build.bat` and
-`tools\package.py`, runs the simulators and attaches the mod archives and the
+`tools\package.py`, runs the simulators and attaches the mod archives, the experimental archive and the
 development builds to the run.
 
 Self-test against a game DLL:

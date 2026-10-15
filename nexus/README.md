@@ -11,7 +11,7 @@ existing pages, and use the same author name (Flubbermunchkin).
 | [theatrical_autodice.txt](theatrical_autodice.txt) | TheatricalAutoDice-1.0.0.zip |
 | [theatrical_autopickpocket.txt](theatrical_autopickpocket.txt) | TheatricalAutoPickpocket-1.0.0.zip |
 | [theatrical_autofollow.txt](theatrical_autofollow.txt) | TheatricalAutoFollow-1.0.0.zip |
-| [theatrical_automarksman.txt](theatrical_automarksman.txt) | TheatricalAutoMarksman-1.0.0.zip |
+| [theatrical_automarksman.txt](theatrical_automarksman.txt) | TheatricalAutoMarksman-1.0.0.zip (main), TheatricalAutoMarksman-ExperimentalCrossbow-1.0.0.zip (optional) |
 
 The five mods already on Nexus (Horse Route Follow + Hardcore Map Markers, AutoForge, Autobrew,
 AutoSharpening) are unchanged and need no new upload.

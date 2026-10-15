@@ -9,7 +9,7 @@ projectile speed, gravity and drag. F4 toggles. Each weapon family can be switch
 | `src/automarksman.cpp` | the plugin (`kcd2_automarksman.dll`): signatures, hooks, targeting, steering, notices |
 | `src/mk_ballistics.h`, `mk_pose.h`, `mk_target.h`, `mk_visibility.h` | portable aim maths, servo, target policy, line of sight |
 | `src/kcd2_common.h` | copy of the repository's shared runtime (unchanged) |
-| `kcd2_automarksman.ini` | the release settings |
+| `kcd2_automarksman.ini` | the release settings (the optional Experimental Crossbow archive turns on `CrossbowPoseDiagnostics` and `DebugLog`) |
 | `localization/` | the ON/OFF message table packed into `Localization\*_xml.pak` |
 | `tools/marksim.cpp` | offline ballistics and steering tests (run by `build.bat`) |
 | `tools/check_sigs.py` | resolves every signature against a WHGame.dll without Windows (`pip install pefile`) |

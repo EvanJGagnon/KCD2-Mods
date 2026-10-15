@@ -31,6 +31,8 @@ CROSSBOWS
   A crossbow is aimed the same way, through its own live firing pose. Its animation moves more than a
   bow, so the camera follows only part of that motion (CrossbowSwayRateGain=40) and keeps the target
   until you move the mouse or lose sight of it. Set Crossbows=0 to leave crossbows completely to you.
+  Crossbow aiming has had less testing than bows and hand cannons. An optional "Experimental Crossbow"
+  download is the same mod with the detailed crossbow log on, for anyone who wants to help test it.
 
 REQUIREMENTS
   - Kingdom Come Script Extender (KCSE) by JerryYOJ
