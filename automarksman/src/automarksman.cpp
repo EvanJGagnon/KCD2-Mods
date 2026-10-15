@@ -108,6 +108,10 @@ static const uintptr_t E_ID = 0x0C, E_NAME = 0xE0, E_TM = 0x58;                 
 static const uintptr_t PR_ENTITY = 0x38, PR_OWNER = 0x108;                         // CProjectile
 static const uintptr_t GENV_SYSTEM_TO_ENTSYS = 0x20;
 static const uintptr_t A_LOADOUT = 0x280, A_SOUL = 0x668, LO_BOW = 0x40, LO_AMMO = 0x48;          // C_Actor -> loadout (SIG_PREVIEW)
+// The loadout is C_ActorShootingExpansion; its Main shooting action (+0x50, null when idle) holds the current
+// sub-action at +0x98 (Charging = drawing a bow, InstantCharging = raising a crossbow or gun, Aiming = ready to
+// loose, Firing, Reloading, Unloading, ...).  Bows, crossbows and firearms all use these classes.
+static const uintptr_t SE_MAIN = 0x50, MAIN_SUB = 0x98;
 static const uintptr_t PR_AMMOPARAMS = 0x68, AP_PARTICLE = 0x88, PP_AIRRES = 0x24, PP_GRAVITY = 0x44;   // CProjectile -> ammo params -> pe_params_particle                               // gEnv.pEntitySystem (+0xA0) = &gEnv.pSystem (+0xC0) - 0x20
 
 typedef void* (*SsUpdate_t)(void*, void*, void*, void*);
@@ -142,7 +146,10 @@ static struct Game {
     GetActor_t getActor; MkIter_t mkIter; IterNext_t iterNext; IterRel_t iterRel; uintptr_t deadByHp;
     Launch_t launch; SsUpdate_t ssUpdate; SsExec_t ssExec;
     Loadout_t loadout; WSys_t wsys; LaunchPose_t launchPose; BowSpeedFn_t bowSpeed;
+    uintptr_t vtShootExp, vtShootMain, vtSub[9];       // optional: weapon state (0 = not found, the pose gate alone decides)
 } G;
+enum { SUB_CHARGING, SUB_INSTANT, SUB_AIMING, SUB_FIRING, SUB_RELOADING, SUB_UNLOADING, SUB_UNCHARGING, SUB_TOIDLE, SUB_BASE, SUB_N };
+static const char* const SUB_NAME[SUB_N] = {"drawing", "raising the weapon", "aiming", "firing", "reloading", "unloading", "lowering", "putting away", "between actions"};
 
 // ---------------- settings ----------------
 static kc::Hotkey g_key;
@@ -160,6 +167,12 @@ static bool g_gaveUp = false;                                    // steering off
 static double g_pauseUntil = 0; static int g_tickFaults = 0;
 static double g_noPoseT = -1;                                    // since when the pose has not been readable (-1: it is)
 static bool g_waitLogged = false;
+// Weapon state (-1 unknown layout, -2 idle/none, else SUB_*), and projectile physics per ammo (arrows, bolts and
+// balls fly differently; the game's own parameters are read at each launch and kept per ammo item).
+static int g_sub = -1, g_subLogged = -3; static bool g_toldNoState = false;
+static void* g_curAmmo = nullptr;
+struct PhysEntry { void* ammo; mk::Flight f; };
+static PhysEntry g_physCache[8]; static int g_physN = 0;
 static V3 g_slot; static bool g_haveSlot = false;               // arrow helper offset in the joint frame (learnt from the first arrow)
 static mk::SpeedCheck g_speedChk; static mk::PoseOffset g_off;
 static mk::Flight g_phys; static bool g_physGame = false;        // gravity and air resistance from the arrow's own physics params
@@ -183,7 +196,7 @@ static struct { uint32_t target; V3 point, at, origin, dir; float dist, errYaw, 
 // One arrow in flight (from the launch until it stops or 2 s).
 static volatile LONG g_shotReady = 0;
 static struct { V3 p0, v0, camPos, camFwd; uint32_t ent, owner; double t0; float hold, speedScale, vlen, gameSpeed; char name[48];
-                mk::LivePose fire; float physK; V3 physG; bool physOk; } g_newShot;
+                mk::LivePose fire; float physK; V3 physG; bool physOk; void* ammo; } g_newShot;
 static struct { bool valid; V3 at; } g_shotPred;                   // predicted impact at release, for the flight check
 static V3 g_tgtP[mk::ShotTrack::N]; static float g_tgtT[mk::ShotTrack::N]; static int g_tgtN = 0;   // the target during the flight
 static mk::ShotTrack g_track; static uint32_t g_trackEnt = 0, g_trackTarget = 0; static double g_trackT0 = 0;
@@ -218,6 +231,7 @@ static bool read_pose_raw(mk::LivePose& lp, float* speed) {
     uintptr_t holder = F<uintptr_t>(g_player, A_LOADOUT); if (!holder || !kc::readable(holder, 8) || !in_image(*(uintptr_t*)holder)) return false;
     uintptr_t lo = (uintptr_t)G.loadout((void*)holder); if (!lo || !kc::readable(lo + LO_BOW, 16)) return false;
     void* bow = F<void*>(lo, LO_BOW); void* ammo = F<void*>(lo, LO_AMMO); if (!bow) return false;
+    g_curAmmo = ammo;
     void* sys = G.wsys();
     float out[9] = {0};
     G.launchPose(sys, out, (void*)g_player, bow);
@@ -245,7 +259,29 @@ static bool read_pose(mk::LivePose& lp, float* speed) {
 }
 // Gravity and drag to aim with: the arrow's own physics parameters once an arrow has shown them, else the
 // measured flights.
-static const mk::Flight& flight_use() { return g_physGame ? g_phys : g_cal.flight; }
+static const mk::Flight& flight_use() {
+    for (int i = 0; i < g_physN; i++) if (g_physCache[i].ammo == g_curAmmo) return g_physCache[i].f;
+    return g_physGame ? g_phys : g_cal.flight;
+}
+static void phys_store(void* ammo, const mk::Flight& f) {
+    if (!ammo) return;
+    for (int i = 0; i < g_physN; i++) if (g_physCache[i].ammo == ammo) { g_physCache[i].f = f; return; }
+    int i = g_physN < 8 ? g_physN++ : 7; g_physCache[i].ammo = ammo; g_physCache[i].f = f;
+}
+// The weapon's shooting sub-action right now (SUB_*), -2 when no shooting action runs, -1 when the layout is
+// not the one this build knows (then only the pose gate decides).
+static int weapon_state_raw() {
+    if (!G.vtShootExp || !G.vtShootMain) return -1;
+    uintptr_t holder = F<uintptr_t>(g_player, A_LOADOUT); if (!holder || !kc::readable(holder, 8) || !in_image(*(uintptr_t*)holder)) return -1;
+    uintptr_t exp = (uintptr_t)G.loadout((void*)holder); if (!exp || !kc::is_a(exp, G.vtShootExp) || !kc::readable(exp + SE_MAIN, 8)) return -1;
+    uintptr_t m = F<uintptr_t>(exp, SE_MAIN); if (!m) return -2;
+    if (!kc::is_a(m, G.vtShootMain) || !kc::readable(m + MAIN_SUB, 8)) return -1;
+    uintptr_t sub = F<uintptr_t>(m, MAIN_SUB); if (!sub) return -2;
+    uintptr_t vt = 0; if (!kc::readable(sub, 8)) return -1; vt = *(uintptr_t*)sub;
+    for (int i = 0; i < SUB_N; i++) if (G.vtSub[i] && vt == G.vtSub[i]) return i;
+    return -1;
+}
+static int weapon_state() { __try { return weapon_state_raw(); } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; } }
 
 // ---------------- skeleton bones ----------------
 // A joint of an entity's character, as the script bind Entity.GetBonePos does it: CEntity::GetCharacter(slot)
@@ -514,8 +550,8 @@ static void track_arrows(double now) {
             float gz = -s.physG.z;
             if (gz > 1.f && gz < 30.f && s.physK >= 0.f && s.physK < 2.f) {
                 if (!g_physGame || fabsf(g_phys.g - gz) > 0.01f || fabsf(g_phys.k - s.physK) > 1e-4f)
-                    logf("   arrow physics (ammo parameters): gravity %.2f, air resistance %.4f - used from now on", gz, s.physK);
-                g_phys.g = gz; g_phys.k = s.physK; g_physGame = true;
+                    logf("   projectile physics (ammo parameters): gravity %.2f, air resistance %.4f - used for this ammo from now on", gz, s.physK);
+                g_phys.g = gz; g_phys.k = s.physK; g_physGame = true; phys_store(s.ammo, g_phys);
             } else if (!g_physGame) logf("   arrow physics (ammo parameters): gravity (%.2f %.2f %.2f), air resistance %.4f - not usable, the measured flights are used", s.physG.x, s.physG.y, s.physG.z, s.physK);
         }
         g_trackTarget = 0; g_shotPred.valid = false;
@@ -570,7 +606,7 @@ static void on_launch(void* self, const float* pos, const float* vel, float scal
         s.t0 = t; s.hold = g_wasAiming ? (float)(t - g_aimT0) : (t - g_releaseT < 0.3 ? (float)(g_releaseT - g_aimT0) : 0.f);
         // The bow's pose and the game's speed right now (Launch runs inside the game's Fire, after the pose was
         // taken): the truth to check the prediction against, and the arrow helper's offset.
-        s.fire.ok = false; s.gameSpeed = 0; read_pose(s.fire, &s.gameSpeed);
+        s.fire.ok = false; s.gameSpeed = 0; read_pose(s.fire, &s.gameSpeed); s.ammo = g_curAmmo;
         // The arrow's physics parameters (ammo params -> particle params: air resistance, gravity vector).
         s.physOk = false;
         uintptr_t ap = F<uintptr_t>(p, PR_AMMOPARAMS), pp = ap && kc::readable(ap + AP_PARTICLE, 8) ? F<uintptr_t>(ap, AP_PARTICLE) : 0;
@@ -626,6 +662,17 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     g_lockPrev = tp; g_lockHasPrev = true;
 
     if (g_gaveUp || now < g_pauseUntil) return;
+
+    // Weapon state (bows, crossbows, firearms alike): steer only while the game's shooting action is in Aiming.
+    // Drawing a bow, raising a crossbow or gun, firing and reloading are never steered on.  (The controller's
+    // aiming flag stays set through a crossbow or gun reload.)
+    g_sub = weapon_state();
+    if (g_sub != g_subLogged) {
+        if (g_sub >= 0 || g_sub == -2) KC_DLOG("weapon: %s", g_sub >= 0 ? SUB_NAME[g_sub] : "no shooting action");
+        else if (!g_toldNoState) { g_toldNoState = true; logf("weapon state: not readable here - steering on the bow pose check alone"); }
+        g_subLogged = g_sub;
+    }
+    if (g_sub != -1 && g_sub != SUB_AIMING) { reset_steer(); return; }
 
     // Where the arrow will start, which way it will go and how fast: the bow's live pose and the game's speed
     // formula when readable (round 4), else the camera plus the offsets measured from earlier arrows.
@@ -812,6 +859,18 @@ static bool resolve(kc::Resolver& R, Found& f) {
     G.vtDog = R.vtable("C_Dog", ".?AVC_Dog@entitymodule@wh@@", 0);
     G.vtAnimal = R.vtable("C_Animal", ".?AVC_Animal@entitymodule@wh@@", 0);
     G.vtMwCtrl = R.vtable("C_MissileWeaponPlayerController", ".?AVC_MissileWeaponPlayerController@entitymodule@wh@@", 0);
+    {   // Optional (weapon state): a miss only turns the check off.
+        int f0 = R.fails;
+        G.vtShootExp = R.vtable("C_ActorShootingExpansion", ".?AVC_ActorShootingExpansion@entitymodule@wh@@", 0);
+        G.vtShootMain = R.vtable("C_ActorActionShootingMain", ".?AVC_ActorActionShootingMain@entitymodule@wh@@", 0);
+        static const char* const subCls[SUB_N] = {".?AVC_ActorActionShootingCharging@entitymodule@wh@@", ".?AVC_ActorActionShootingInstantCharging@entitymodule@wh@@",
+            ".?AVC_ActorActionShootingAiming@entitymodule@wh@@", ".?AVC_ActorActionShootingFiring@entitymodule@wh@@", ".?AVC_ActorActionShootingReloading@entitymodule@wh@@",
+            ".?AVC_ActorActionShootingUnloading@entitymodule@wh@@", ".?AVC_ActorActionShootingUncharging@entitymodule@wh@@",
+            ".?AVC_ActorActionShootingTransitioningToIdle@entitymodule@wh@@", ".?AVC_ActorActionShootingBase@entitymodule@wh@@"};
+        for (int i = 0; i < SUB_N; i++) G.vtSub[i] = R.vtable(SUB_NAME[i], subCls[i], 0);
+        if (R.fails != f0) { logf("  (weapon state classes missing: optional, steering uses the bow pose check alone)"); G.vtShootExp = 0; }
+        R.fails = f0;
+    }
     G.vtProjectile = R.vtable("CProjectile", ".?AVCProjectile@entitymodule@wh@@", 0);
     f.launch = R.slot("CProjectile::Launch", G.vtProjectile, 35, SIG_LAUNCH);
     // CArrow's slot 35 must be a jmp to that same Launch (or already hooked by another mod: then chained).

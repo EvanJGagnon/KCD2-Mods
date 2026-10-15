@@ -162,3 +162,10 @@ offsets, moving targets, rate cap, bow sway still causing misses).
   (error 22.5 -> 99.4 deg) and set the global off switch. Now it pauses 0.5 s and re-settles; only 6 trips in a row
   with a settled, plausible bow give up steering (tracking and logging go on). Pose read faults back off 1-60 s
   and retry; tick faults restart the aim (20 to give up). The offset yaw is wrapped (0.4.0 logged +360 deg).
+- **Crossbows and firearms** (static RE, /mnt/project-files/theatrical/shared/automarksman-weapons-re.md): same
+  Fire/Launch path, same GetLaunchPose (no weapon branch: "arrow" attachment, fallback "arw_01", dir = -Z) and the
+  same speed function (+0x140 is the OldFormula switch, linear in power; power is 1.0 from Aiming). Bolts are CArrow,
+  balls CProjectile: both slot-35 hooks cover them. The controller's aiming flag stays 1 during a crossbow/gun
+  reload, so 0.5.0 steers only while the Main shooting action's sub-action (`[[loadout]+0x50]+0x98`) is
+  C_ActorActionShootingAiming (RTTI, optional: without it the pose gate alone decides). Projectile gravity and
+  drag are read at each launch and kept per ammo item. Multi-pellet ammo (class 4) has real random spread.

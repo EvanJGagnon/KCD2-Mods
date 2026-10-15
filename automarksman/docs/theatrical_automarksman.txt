@@ -22,6 +22,11 @@ would really go, so loose when it is green. If something looks wrong (the camera
 bow pose cannot be read for a moment) the assist pauses and picks the aim up again instead of switching
 itself off.
 
+Crossbows and firearms (hand cannons) go through the same game code as bows: the mod reads their live
+launch pose, the game's speed formula and the projectile's own gravity and drag the same way, and only
+steers once the weapon is actually aimed (never while it is being reloaded). Bows are tested in game;
+crossbows and firearms are in this test build for the first time.
+
 That is all it does. You still draw, hold and release the bow yourself. The game flies the arrow, sways
 the bow with Henry's skill and stamina, and decides whether the arrow hits. Nothing is teleported, no
 hit is forced, and no item, arrow or stat is changed.

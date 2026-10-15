@@ -42,7 +42,14 @@ PLAN = {
     'SIG_PREVIEW':        ('find', 0x2896326),
 }
 RTTI_ONLY = ['.?AVC_Player@entitymodule@wh@@', '.?AVC_MissileWeaponPlayerController@entitymodule@wh@@', '.?AVCArrow@entitymodule@wh@@',
-             '.?AVC_Human@entitymodule@wh@@', '.?AVC_NPCActor@entitymodule@wh@@', '.?AVC_Horse@entitymodule@wh@@', '.?AVC_Dog@entitymodule@wh@@', '.?AVC_Animal@entitymodule@wh@@']
+             '.?AVC_Human@entitymodule@wh@@', '.?AVC_NPCActor@entitymodule@wh@@', '.?AVC_Horse@entitymodule@wh@@', '.?AVC_Dog@entitymodule@wh@@', '.?AVC_Animal@entitymodule@wh@@',
+             # weapon state (0.5.0; optional in the mod)
+             '.?AVC_ActorShootingExpansion@entitymodule@wh@@', '.?AVC_ActorActionShootingMain@entitymodule@wh@@',
+             '.?AVC_ActorActionShootingCharging@entitymodule@wh@@', '.?AVC_ActorActionShootingInstantCharging@entitymodule@wh@@',
+             '.?AVC_ActorActionShootingAiming@entitymodule@wh@@', '.?AVC_ActorActionShootingFiring@entitymodule@wh@@',
+             '.?AVC_ActorActionShootingReloading@entitymodule@wh@@', '.?AVC_ActorActionShootingUnloading@entitymodule@wh@@',
+             '.?AVC_ActorActionShootingUncharging@entitymodule@wh@@', '.?AVC_ActorActionShootingTransitioningToIdle@entitymodule@wh@@',
+             '.?AVC_ActorActionShootingBase@entitymodule@wh@@']
 
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT
