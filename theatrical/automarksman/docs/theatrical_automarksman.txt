@@ -1,6 +1,9 @@
 THEATRICAL AUTOMARKSMAN 1.0.0 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
+EXPERIMENTAL RELEASE: one download includes bows, crossbows and hand cannons.
+Partially covered people may not be targeted even when part of their body is visible.
+
 While Henry aims a bow, a crossbow or a hand cannon, the camera turns gently onto the head of the person
 (or the chest of the animal) nearest the centre of your view, so that the arrow, bolt or ball, not the
 middle of the screen, meets it. F4 switches it on and off. You still draw, aim and release yourself.
@@ -31,8 +34,8 @@ CROSSBOWS
   A crossbow is aimed the same way, through its own live firing pose. Its animation moves more than a
   bow, so the camera follows only part of that motion (CrossbowSwayRateGain=40) and keeps the target
   until you move the mouse or lose sight of it. Set Crossbows=0 to leave crossbows completely to you.
-  Crossbow aiming has had less testing than bows and hand cannons. An optional "Experimental Crossbow"
-  download is the same mod with the detailed crossbow log on, for anyone who wants to help test it.
+  Crossbow aiming has had less testing than bows and hand cannons. All three weapons are included
+  in this one download; optional shot diagnostics can be enabled in the ini for bug reports.
 
 REQUIREMENTS
   - Kingdom Come Script Extender (KCSE) by JerryYOJ

@@ -1,6 +1,6 @@
 # Builds every mod on a Windows runner with the repo's own build.bat (published mods and the Theatrical
 # Collection), runs the offline simulators, packages and audits the release archives with tools/package.py, and
-# attaches them to the run: stable archives, the experimental AutoMarksman crossbow archive (kept apart), and the
+# attaches one release archive for each mod (AutoMarksman includes all ranged weapons), and
 # development builds with the test tools.
 name: Build
 
@@ -51,15 +51,8 @@ jobs:
           name: release-archives
           path: |
             dist/*.zip
-            !dist/*Experimental*.zip
             dist/SHA256SUMS.txt
             dist/RELEASE_CONTENTS.txt
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: experimental-archives
-          path: dist/*Experimental*.zip
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v6
