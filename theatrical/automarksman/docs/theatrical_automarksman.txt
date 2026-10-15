@@ -1,9 +1,9 @@
 THEATRICAL AUTOMARKSMAN 1.0.0 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
-While Henry aims a bow or a hand cannon, the camera turns gently onto the head of the person (or the
-chest of the animal) nearest the centre of your view, so that the arrow or ball, not the middle of the
-screen, meets it. F4 switches it on and off. You still draw, aim and release yourself.
+While Henry aims a bow, a crossbow or a hand cannon, the camera turns gently onto the head of the person
+(or the chest of the animal) nearest the centre of your view, so that the arrow, bolt or ball, not the
+middle of the screen, meets it. F4 switches it on and off. You still draw, aim and release yourself.
 
 People come first; your horse and dogs are left alone. Nobody behind a wall, terrain or other solid cover
 is picked, and a shot whose arc would hit something on the way is not taken either. The lock is soft:
@@ -27,11 +27,10 @@ gives the game's sway back at once.
 That is all it does. The game flies the arrow, sways the bow with Henry's skill and stamina, and decides
 whether the shot hits. Nothing is teleported, no hit is forced, and no item, arrow or stat is changed.
 
-CROSSBOWS (EXPERIMENTAL, OFF IN THIS DOWNLOAD)
-  Crossbows are off in the main download (Crossbows=0): with a crossbow the camera and sway stay
-  vanilla. Crossbow aiming works reasonably well but has had less testing than bows and hand cannons,
-  so it comes as a separate "Experimental Crossbow" download (the same mod with Crossbows=1 and the
-  detailed log on). You can also switch it on yourself: set Crossbows=1 in the .ini.
+CROSSBOWS
+  A crossbow is aimed the same way, through its own live firing pose. Its animation moves more than a
+  bow, so the camera follows only part of that motion (CrossbowSwayRateGain=40) and keeps the target
+  until you move the mouse or lose sight of it. Set Crossbows=0 to leave crossbows completely to you.
 
 REQUIREMENTS
   - Kingdom Come Script Extender (KCSE) by JerryYOJ
@@ -59,7 +58,7 @@ SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
   [Keys]    Toggle=F4             on/off key (F1-F12, a letter or digit, or a symbol key such as ])
   [Options] Notices=1             short ON/OFF message when you press the key
             Bows=1, HandCannons=1 which weapons are aimed for
-            Crossbows=0           1 = crossbows too (experimental)
+            Crossbows=1           0 = crossbows left to you (camera and sway as vanilla)
             StartEnabled=1        1 = on from the start
             ConeDegrees=10        how far from the centre of the view a target may be
             MaxDistance=80        metres
@@ -83,7 +82,7 @@ SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
             ArrowSpeed=55         arrow speed guess (only without the bow pose)
             RememberBow=1         keep what was measured for the next session (kcd2_automarksman_calibration.txt)
             LeadMovingTargets=1   aim ahead of moving targets
-            CrossbowPoseDiagnostics=0   experimental crossbow logging (with DebugLog=1)
+            CrossbowPoseDiagnostics=0   detailed crossbow logging for bug reports (with DebugLog=1)
             DebugLog=0            1 = detailed log (kcd2_automarksman.log), including every shot's real miss
 
 COMPATIBILITY
@@ -95,7 +94,6 @@ COMPATIBILITY
     on an unknown version the mod switches itself off and changes nothing.
 
 KNOWN ISSUES AND LIMITATIONS
-  - Crossbows: see above.
   - The aim assumes a full draw; an arrow loosed early is slower and drops more.
   - The game fires a moment after you release (on the animation), so a weapon that is still swaying
     then can still move the shot a little. A shaky, low-skill or tired Henry still misses.
@@ -121,7 +119,7 @@ LICENSE
   GNU GPL v3 (LICENSE.txt).
 
 CHANGES
-  1.0.0  - First release. Bows and hand cannons; crossbows are an experimental option (Crossbows=0).
+  1.0.0  - First release. Bows, crossbows and hand cannons.
          - Line of sight: nobody behind solid cover is aimed at, and a blocked arc is not taken.
          - F4 ON/OFF messages come from the mod's own text (Localization), the bow-calibration message
            only appears for bows.

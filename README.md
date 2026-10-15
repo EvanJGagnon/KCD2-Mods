@@ -17,7 +17,7 @@ Native (C++) mods for **Kingdom Come: Deliverance II**, loaded by the
 | **[Theatrical AutoSharpening](https://www.nexusmods.com/kingdomcomedeliverance2/mods/3802)** | Henry sharpens the weapon himself at the grindstone: pedalling, holding the angle and working the edge end to end until it is at 100%, then gets up. Idea by [cpk](https://www.nexusmods.com/profile/cpk). | F7 |
 | **Theatrical AutoLockpick** (new) | Henry picks the lock himself with the game's own pick and turn controls: his tremble, pick wear and broken picks stay. | F2 |
 | **Theatrical AutoDice** (new) | Henry plays his own turns at dice: he sets aside the dice worth keeping and decides when to pass. The game throws and scores. | F3 |
-| **Theatrical AutoMarksman** (new) | While a bow or hand cannon is aimed, the camera turns onto the head of the target nearest the centre, allowing for drop and movement; nobody behind cover. You still draw and release. Crossbows: experimental download only. | F4 |
+| **Theatrical AutoMarksman** (new) | While a bow, crossbow or hand cannon is aimed, the camera turns onto the head of the target nearest the centre, allowing for drop and movement; nobody behind cover. You still draw and release. | F4 |
 | **Theatrical AutoPickpocket** (new) | Henry lets go of the pickpocket charge at a safe moment and plays the item grid, keeping every risk. | [ |
 | **Theatrical AutoFollow** (new) | Henry can follow anyone with the game's own follow action, as if they were a guide. | ] |
 
@@ -92,13 +92,12 @@ python tools\package.py
 - `out\dev\`, `theatrical\<mod>\out\dev\` - development builds (`/DKC_DEVTOOLS`: self-test exports, horse-mod live reload) plus `selftest.exe`, `routetest.exe` and the simulators
 - `dist\` - the mod archives, `SHA256SUMS.txt` and `RELEASE_CONTENTS.txt` (every file of every archive). `package.py`
   also audits them: required files present, manifest and README versions match, no hotkey used twice, `DebugLog=0`,
-  and nothing that looks like a game asset or a build leftover. `TheatricalAutoMarksman-ExperimentalCrossbow-*.zip`
-  is the experimental crossbow build and is uploaded by CI as a separate artifact.
+  and nothing that looks like a game asset or a build leftover.
 
 `build.bat` expects Visual Studio 2022 Community; for another edition or the Build Tools, set `KC_VCVARS`
 to its `vcvars64.bat` first. Every push is also built on GitHub Actions
 ([`.github/workflows/build.yml`](.github/workflows/build.yml)): a Windows runner runs `build.bat` and
-`tools\package.py`, runs the simulators and attaches the mod archives, the experimental archive and the
+`tools\package.py`, runs the simulators and attaches the mod archives and the
 development builds to the run.
 
 Self-test against a game DLL:
