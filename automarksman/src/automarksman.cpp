@@ -217,6 +217,15 @@ static float g_lastYaw = 0, g_lastPitch = 0; static bool g_haveLast = false;
 static float g_wrX = 0, g_wrZ = 0;                              // what the mod last put into m_lookAngleAccum
 static float g_errStart = 0; static int g_errFrames = 0;        // "does the camera follow?" check
 static const char* volatile g_notice = nullptr;
+// Test-stage UI workaround: SendInfoText on this game build can show raw @ text for unlocalized
+// literals. Keep notices configurable and OFF by default; the log always records F4 state.
+static bool g_notices = false;
+// Crossbow diagnostic captures the actual, unmodified firing-pose direction even when
+// nothing is targeted. It does not alter the camera, weapon skeleton or projectile.
+static bool g_crossbowDiag = false;
+static double g_diagNext = 0, g_diagPrevT = 0;
+static bool g_diagPrevValid = false, g_diagPrevOn = false;
+static V3 g_diagPrevPose, g_diagPrevView;
 
 // What the aim looked like on the last frame the mod steered (for the per-shot log).
 static struct { uint32_t target; V3 point, at, origin, dir; float dist, errYaw, errPitch, speed, gap; bool bone, live; double t; } g_aim;
@@ -632,7 +641,7 @@ static void track_arrows(double now) {
                  g_aim.live ? "from the bow's live pose" : "from the camera and measured offsets");
             g_trackTarget = g_aim.target; g_shotPred.valid = g_aim.gap >= 0; g_shotPred.at = g_aim.at;
         } else logf("   at release: the assist was not aiming (off, hands-on or no target)");
-        if (changed || !wasMeasured) g_notice = "Game.SendInfoText(\"AutoMarksman: bow measured\", false)";
+        if (bowShot && changed && !wasMeasured && g_notices) g_notice = "Game.SendInfoText(\"AutoMarksman: bow measured\", false)";
         g_track = mk::ShotTrack(); g_track.p0 = s.p0; g_track.v0 = s.v0; g_trackEnt = s.ent; g_trackT0 = s.t0; g_trackFamily = s.family;
         g_trackMiss = 1e9f; g_trackPrev = s.p0; g_trackHasPrev = true; g_tgtN = 0;
         save_calib();
@@ -853,12 +862,40 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     }
 }
 
+static void crossbow_diagnostic(double now, uintptr_t look, const V3& camPos, const V3& camFwd, int family) {
+    if (!g_crossbowDiag || !kc::g_debug || family != FAM_CROSSBOW || g_sub != SUB_AIMING) {
+        g_diagPrevValid = false; return;
+    }
+    if (now < g_diagNext) return;
+    g_diagNext = now + 0.25;
+    mk::LivePose lp; float predictedSpeed = 0;
+    bool got = read_pose(lp, &predictedSpeed) && (lp.pos - camPos).len() < 3.f;
+    float cameraStep = 0, poseStep = 0;
+    if (g_diagPrevValid && g_diagPrevOn == g_on && got) {
+        cameraStep = mk::deg(mk::angle_between(camFwd, g_diagPrevView));
+        poseStep = mk::deg(mk::angle_between(lp.dir, g_diagPrevPose));
+    }
+    float reqX = F<float>(look, L_REQUEST), reqZ = F<float>(look, L_REQUEST + 8);
+    if (got) {
+        float offY = mk::deg(mk::wrap_pi(mk::yaw_of(lp.dir) - mk::yaw_of(camFwd)));
+        float offP = mk::deg(mk::pitch_of(lp.dir) - mk::pitch_of(camFwd));
+        KC_DLOG("crossbow diagnostic: F4=%s target=%s input=(%.4f %.4f) camera_step=%.3f deg weapon_step=%.3f deg weapon_vs_camera=(yaw %+.3f pitch %+.3f) speed=%.1f",
+                 g_on ? "ON" : "OFF", g_lock ? "YES" : "NONE", reqX, reqZ, cameraStep, poseStep, offY, offP, predictedSpeed);
+        g_diagPrevPose = lp.dir;
+    } else {
+        KC_DLOG("crossbow diagnostic: F4=%s target=%s live firing pose UNAVAILABLE",
+                 g_on ? "ON" : "OFF", g_lock ? "YES" : "NONE");
+    }
+    g_diagPrevView = camFwd; g_diagPrevT = now;
+    g_diagPrevOn = g_on; g_diagPrevValid = got;
+}
+
 static void tick() {
     double now = now_s(); float dt = g_lastT > 0 ? (float)std::min(0.1, now - g_lastT) : 0.f; g_lastT = now;
     if (g_key.pressed()) {
         g_on = !g_on; reset_aim(); sway_hook(g_on);
         logf("assist %s", g_on ? "ON" : "OFF");
-        g_notice = g_on ? "Game.SendInfoText(\"AutoMarksman on\", false)" : "Game.SendInfoText(\"AutoMarksman off\", false)";
+        if (g_notices) g_notice = g_on ? "Game.SendInfoText(\"AutoMarksman on\", false)" : "Game.SendInfoText(\"AutoMarksman off\", false)";
     }
     uintptr_t fw = *(uintptr_t*)G.fwGlobal; if (!fw) return;
     uintptr_t pl = (uintptr_t)G.clientActor((void*)fw);
@@ -874,7 +911,7 @@ static void tick() {
     bool aiming = F<uint8_t>(ctrl, MW_AIMING) != 0;
     if (aiming && !g_wasAiming) {
         g_aimT0 = now; reset_aim();
-        if (g_on && !g_cal.measured() && !g_toldUncal) { g_toldUncal = true; g_notice = "Game.SendInfoText(\"AutoMarksman: your first arrow measures this bow\", false)";
+        if (g_on && g_notices && weapon_family(ctrl) == FAM_BOW && !g_cal.measured() && !g_toldUncal) { g_toldUncal = true; g_notice = "Game.SendInfoText(\"AutoMarksman: your first arrow measures this bow\", false)";
             logf("aiming with the first-shot guess (%.0f m/s) - the first arrow will measure the bow", g_cal.speed); }
     }
     if (!aiming && g_wasAiming) g_releaseT = now;
@@ -891,6 +928,7 @@ static void tick() {
                                                        fam == FAM_BOW ? "Bow" : fam == FAM_CROSSBOW ? "Crossbow" : "Gun");
         }
         g_family = fam; g_swayScale = g_swayStrength[fam];
+        crossbow_diagnostic(now, look, camPos, camFwd, fam);
     } else {
         if (wasAiming && g_swayPeakRaw > 0 && g_swayHooked)
             KC_DLOG("native sway this aim: peak %.1f deg/s from the game, %.1f deg/s after SwayStrength", mk::deg(g_swayPeakRaw), mk::deg(g_swayPeakRaw * g_swayScale));
@@ -1022,6 +1060,8 @@ static DWORD WINAPI Init(LPVOID) {
     kc::init(g_self, "kcd2_automarksman");
     QueryPerformanceFrequency(&g_qpf);
     g_key.vk = kc::ini_key("Toggle", VK_F4);
+    g_notices = kc::ini_int("Options", "Notices", 0) != 0;
+    g_crossbowDiag = kc::ini_int("Options", "CrossbowPoseDiagnostics", 0) != 0;
     g_on = kc::ini_int("Options", "StartEnabled", 0) != 0;
     g_policy.cone = mk::rad((float)std::max(2, std::min(30, kc::ini_int("Options", "ConeDegrees", 10))));
     g_maxDist = (float)std::max(10, std::min(200, kc::ini_int("Options", "MaxDistance", 80)));
@@ -1053,7 +1093,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_ctl.gate.settle = std::max(0, std::min(2000, kc::ini_int("Options", "SettleMs", 200))) / 1000.f;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.6.0 (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.6.0 LOCAL DIAGNOSTIC (game ts 0x%08X)", R.im.timestamp);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     G.fwGlobal = f.fwGlobal; G.sysGlobal = f.sysGlobal;
@@ -1074,6 +1114,7 @@ static DWORD WINAPI Init(LPVOID) {
     logf("ready: %s switches the assist %s (now %s); cone %.0f deg, range %.0f m, turn speed %.0f deg/s, first-shot arrow speed %.0f m/s; %s, %s",
          kc::key_name(g_key.vk, kn, sizeof kn), "on/off", g_on ? "ON" : "OFF", mk::deg(g_policy.cone), g_maxDist, mk::deg(g_steer.maxRate), g_cal.speed,
          g_hostileOnly ? "people only when in combat" : "anyone you aim at", g_headBone ? "head bone" : "head from box");
+    logf("local diagnostics: crossbow firing pose %s, in-game notices %s", g_crossbowDiag ? "ON" : "OFF", g_notices ? "ON" : "OFF");
     logf("targets: people %s, animals %s, horses %s, dogs %s; impact marker %s", g_policy.people ? "yes" : "no", g_policy.animals ? "yes" : "no",
          g_policy.horses ? "yes" : "no", g_policy.dogs ? "yes" : "no", g_marker ? "on" : "off");
     logf("native aim sway while the assist is on: bow %.0f%%, crossbow %.0f%%, hand cannon %.0f%% of the game's%s", g_swayStrength[1] * 100.f, g_swayStrength[2] * 100.f,

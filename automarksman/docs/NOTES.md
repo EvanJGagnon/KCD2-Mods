@@ -193,3 +193,10 @@ offsets, moving targets, rate cap, bow sway still causing misses).
   (one shared value put crossbow shots' start 41 cm off). The calibration file (fallback only) learns from
   bow shots only.
 - Arrows 37 and 42 left their launch plane mid-flight (deflected 54-116 cm sideways): now reported as brushed/hit.
+
+### LOCAL ROUND-6 DIAGNOSTIC PATCH (not release-ready)
+- Fix false "bow measured" notification after crossbow and gun shots: only notify on first real bow measurement.
+- Gate first-bow measurement prompt to actual bow family.
+- Notices=0 by default, because current SendInfoText literal text can display raw @ in-game. F4 continues to work and is logged.
+- CrossbowPoseDiagnostics=1 logs firing-pose yaw/pitch, camera movement and mouse input at 4 Hz even if no target; compare F4 OFF and ON, and aim at empty space. This is read-only diagnostics, not a claimed weapon-sway fix.
+- Do not publish/merge before live diagnosis; preserve four other mods.
