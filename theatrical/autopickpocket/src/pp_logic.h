@@ -215,9 +215,9 @@ struct Controller {
         for (int a = 0, b = routeLen - 1; a < b; a++, b--) { int t = route[a]; route[a] = route[b]; route[b] = t; }
         if (!routeLen) { target = EXIT; goal = 3; logf("plan: home (%.1fs left, %.1fs to the exit)", remainingMs(now) / 1000, homeMs(pos) / 1000); return; }
         char buf[96]; int o = 0;
-        for (int r = 0; r < routeLen && o < 80; r++) o += snprintf(buf + o, sizeof buf - o, "%s%d", n[route[r]].goal == 2 ? "?" : "", n[route[r]].slot);
+        for (int r = 0; r < routeLen && o < 80; r++) o += snprintf(buf + o, sizeof buf - o, "%s%s%d", r ? " " : "", n[route[r]].goal == 2 ? "?" : "", n[route[r]].slot);
         const Node& f = n[route[0]]; target = f.slot; goal = f.goal;
-        logf("plan: %s slot %d (%s) %.1fs left; route %s->exit, %.1fs of %.1fs", goal == 1 ? "take" : "uncover", target, g.slot[target].name,
+        logf("plan: %s slot %d (%s) %.1fs left; route %s exit, %.1fs of %.1fs", goal == 1 ? "take" : "uncover", target, g.slot[target].name,
              remainingMs(now) / 1000, buf, bestT / 1000, (rem + cfg.safetyMs) / 1000);
         for (int r = 0; r < routeLen; r++) route[r] = n[route[r]].slot;
     }

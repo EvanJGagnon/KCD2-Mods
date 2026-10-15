@@ -6,9 +6,9 @@ R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 LICENSE = os.path.join(R, '..', '..', 'LICENSE')     # the repository's GPL v3
 AUTHOR = 'Flubbermunchkin'
 MOD = dict(folder='theatrical_autopickpocket', title='Theatrical AutoPickpocket', zip='TheatricalAutoPickpocket', dll='kcd2_autopickpocket.dll',
-           ver='0.2.0', readme='theatrical_autopickpocket',
+           ver='0.2.1', readme='theatrical_autopickpocket',
            desc="Henry pickpockets with the game's own inputs: lets go of the charge at a safe moment and plays the item grid, keeping every risk. [ toggles.",
-           text=[('tap_on', 'AutoPickpocket: on'), ('tap_off', 'AutoPickpocket: off (you pickpocket yourself)')],
+           text=[],   # notices are plain text in the DLL (the @key table was not resolved in game)
            ini='[Keys]\n'
                '; key: F1-F12, a letter or digit, or a symbol key such as ]\nToggle=[\n\n'
                '[Options]\n'
@@ -45,6 +45,7 @@ def write(path, text):
 
 def localization(m, d):
     """Mod text entries (English in every language), packed like the game's own <Language>_xml.pak."""
+    if not m['text']: return
     xml = '<?xml version="1.0" encoding="utf-8"?>\n<Table>\n' + ''.join(
         f'\t<Row><Cell>{k}</Cell><Cell>{v}</Cell><Cell>{v}</Cell></Row>\n' for k, v in m['text']) + '</Table>\n'
     ld = os.path.join(d, 'Localization'); os.makedirs(ld)

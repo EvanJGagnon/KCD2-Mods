@@ -30,7 +30,7 @@
 
 using kc::logf;
 
-#define VERSION "0.2.0"
+#define VERSION "0.2.1"
 
 // ---------------- signatures (build 15693 RVAs in comments) ----------------
 // C_Pickpocketing::Update: mov ecx,[rcx+78h] (state) right after the stack cookie                 0x2EB3B34
@@ -109,8 +109,10 @@ typedef void* (*SsUpdate_t)(void*, void*, void*, void*);
 typedef bool (*SsExec_t)(void*, const char*, size_t, const char*, void*);
 static SsUpdate_t g_ssUpdate = nullptr; static SsExec_t g_ssExec = nullptr;
 static const char* volatile g_notice = nullptr;
-static const char* const NOTE_ON = "Game.SendInfoText(\"@tap_on\", true)";
-static const char* const NOTE_OFF = "Game.SendInfoText(\"@tap_off\", true)";
+// Plain text (false = not a localization key): round 2 showed "@tap_on" raw, the mod's own text table was
+// not resolved in game. AutoMarksman's literal notices showed fine.
+static const char* const NOTE_ON = "Game.SendInfoText(\"AutoPickpocket: on\", false)";
+static const char* const NOTE_OFF = "Game.SendInfoText(\"AutoPickpocket: off (you pickpocket yourself)\", false)";
 static void* SsUpdateHook(void* self, void* a, void* b, void* c) {
     void* r = g_ssUpdate(self, a, b, c);
     if (g_notice && g_ssExec) {

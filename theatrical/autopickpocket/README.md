@@ -11,7 +11,7 @@ packaging. It changes no file outside `theatrical/autopickpocket/` (plus its own
 ```bat
 set KC_AUTHOR=Flubbermunchkin
 build.bat
-python tools\package.py            :: dist\TheatricalAutoPickpocket-0.2.0.zip
+python tools\package.py            :: dist\TheatricalAutoPickpocket-0.2.1.zip
 out\dev\selftest.exe "<game>\Bin\Win64MasterMasterSteamPGO\WHGame.dll" out\dev\kcd2_autopickpocket.dll 2eb3b34 203dee0 566bcc 2bb9dac 2bb9e50 2bba2d4 2bbac78 2b8d3f4 3f74dd8 3c33898 3eebcd0
 python tools\check_sigs.py "<game>\Bin\Win64MasterMasterSteamPGO\WHGame.dll"
 out\dev\ppsim.exe 2000 1            :: offline grid simulator; exit code 1 if any run got caught

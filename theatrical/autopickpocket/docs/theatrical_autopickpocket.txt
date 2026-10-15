@@ -1,4 +1,4 @@
-THEATRICAL AUTOPICKPOCKET 0.2.0 (test build) - Kingdom Come: Deliverance II
+THEATRICAL AUTOPICKPOCKET 0.2.1 (test build) - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 Henry pickpockets for you, the way a careful thief would, with the game's own controls. You still sneak
@@ -69,6 +69,8 @@ LICENSE
   GNU GPL v3 (LICENSE.txt).
 
 CHANGES
+  0.2.1  - The on/off message shows real text instead of "@tap_on". Log lines list the planned route
+           with spaces. No change to how the mod plays.
   0.2.0  - Plans the whole route through the grid (no more back-and-forth), takes every item that fits.
          - Default key is now [ (F5 is a common quicksave key). Symbol keys such as [ ] ; work in the ini.
   0.1.0  - First test build.
