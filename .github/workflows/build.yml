@@ -1,5 +1,7 @@
-# Builds the mods on a Windows runner with the repo's own build.bat and tools/package.py, and attaches
-# the mod archives (dist\) and the development builds with the test tools (out\dev\) to the run.
+# Builds every mod on a Windows runner with the repo's own build.bat (published mods and the Theatrical
+# Collection), runs the offline simulators, packages and audits the release archives with tools/package.py, and
+# attaches them to the run: stable archives, the experimental AutoMarksman crossbow archive (kept apart), and the
+# development builds with the test tools.
 name: Build
 
 on:
@@ -26,23 +28,44 @@ jobs:
           if (-not $vs) { throw "no Visual Studio with the x64 C++ tools on this runner" }
           "KC_VCVARS=$vs\VC\Auxiliary\Build\vcvars64.bat" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Build (build.bat)
+      - name: Build (build.bat; also runs dicesim and marksim)
         shell: cmd
         env:
           KC_AUTHOR: Flubbermunchkin
         run: call build.bat
 
-      - name: Package (tools/package.py)
+      - name: Offline simulators
+        shell: cmd
+        run: |
+          type theatrical\automarksman\out\dev\marksim.txt | findstr /C:"ALL PASSED" || exit /b 1
+          theatrical\autolockpick\out\dev\lpsim.exe 2000 1 || exit /b 1
+          theatrical\autolockpick\out\dev\lpsim.exe 2000 7 || exit /b 1
+          theatrical\autopickpocket\out\dev\ppsim.exe 2000 1 || exit /b 1
+          theatrical\autopickpocket\out\dev\ppsim.exe 2000 7 || exit /b 1
+
+      - name: Package and audit (tools/package.py)
         run: python tools\package.py
 
       - uses: actions/upload-artifact@v6
         with:
-          name: mod-archives
-          path: dist/*.zip
+          name: release-archives
+          path: |
+            dist/*.zip
+            !dist/*Experimental*.zip
+            dist/SHA256SUMS.txt
+            dist/RELEASE_CONTENTS.txt
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: experimental-archives
+          path: dist/*Experimental*.zip
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v6
         with:
           name: dev-builds
-          path: out/dev/
+          path: |
+            out/dev/
+            theatrical/*/out/dev/
           if-no-files-found: error

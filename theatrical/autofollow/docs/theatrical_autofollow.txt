@@ -1,0 +1,68 @@
+THEATRICAL AUTOFOLLOW 1.0.0 - Kingdom Come: Deliverance II
+by Flubbermunchkin
+
+Henry can follow anyone. Normally the game only offers "Follow" for certain NPCs - the ones it marks
+as followable, such as a guide leading you somewhere. This mod makes the game treat every NPC as
+followable, the way its own developer switch "wh_player_FollowAlwaysCanFollow" describes it ("player can
+follow anyone as if they had followable NPC side effect").
+
+Everything else is the game's own following: the same Follow prompt and key, Henry walking or running
+after the person at their pace, the same way of stopping. The game's other rules still apply (for
+example it does not offer Follow for everyone in every situation, such as the dead). The mod adds no
+pathfinding of its own, moves nobody, and changes nothing in quests or your save.
+
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
+
+INSTALL
+  Vortex: install as usual.
+  Manual: copy the "theatrical_autofollow" folder from this archive into <game>\Mods\
+          (you should end up with <game>\Mods\theatrical_autofollow\KCSE\Plugins\kcd2_autofollow.dll).
+  Uninstall: delete that folder.
+
+HOW TO USE
+  1. Walk up to a person, ideally one who is walking somewhere, and look at them.
+  2. The game's "Follow" prompt appears, as it does for a guide. Use it.
+  3. Henry follows them until you move or stop following, exactly as with NPCs the game lets you follow.
+  ] switches follow-anyone off (vanilla behaviour) and on again.
+
+SETTINGS  (Mods\theatrical_autofollow\KCSE\Plugins\kcd2_autofollow.ini)
+  [Keys]    Toggle=]        on/off key (F1-F12, a letter or digit, or a symbol key such as ])
+  [Options] Enabled=1       1 = on when the game starts
+            Notices=1       1 = short on-screen message when the key switches it
+            SetCvar=1       1 = also set the game's own (unused) developer switch
+            DebugDraw=0     1 = also turn on the game's own follow debug drawing (for testing)
+            DebugLog=0      1 = detailed log for bug reports
+
+COMPATIBILITY
+  - Changes one check in memory only while it is on (nothing on disk, nothing in your save); switching
+    it off with ] restores the game's own behaviour. Another mod that patches the same follow check
+    would conflict.
+  - Built and checked for the Steam version 1.5.x (build 15693). Other stores and versions are untested;
+    on an unknown version the mod switches itself off and changes nothing.
+
+GAME UPDATES
+  The mod does not use fixed memory addresses. At startup it finds the game's "followable" check by
+  pattern and checks the code it changes byte by byte. If a game update changes that code, the mod turns itself
+  off and changes nothing. The log then says "this game version is not supported yet".
+
+BUG REPORTS
+  Please include kcd2_autofollow.log (next to the DLL, rewritten every session).
+
+CREDITS
+  - Warhorse Studios, whose own switch this is.
+  - JerryYOJ for KCSE and the Address Library.
+
+LICENSE
+  GNU GPL v3 (LICENSE.txt).
+
+CHANGES
+  1.0.0  - First release (the 0.2.1 test build, unchanged in play).
+  0.2.1  - The on/off message shows plain text (it showed "@taf_on" / "@taf_off" before).
+  0.2.0  - Following now really works: the game's "followable" check itself treats everyone as
+           followable (the developer switch alone turned out to do nothing in the release game).
+           The toggle key is now ] (F10 was taken by another mod).
+  0.1.0  - First test build.

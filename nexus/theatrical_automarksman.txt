@@ -1,0 +1,108 @@
+NAME
+Theatrical AutoMarksman
+
+CATEGORY
+Gameplay
+
+VERSION
+1.0.0
+
+SUMMARY (307/350 characters)
+While Henry aims a bow, crossbow or hand cannon, the camera turns gently onto the head of the target nearest the centre of the view, allowing for drop and movement, using the weapon's real launch pose. You still draw and release; the game decides the hit. Targets behind solid cover are skipped. F4 toggles.
+
+DESCRIPTION (BBCode)
+[size=4][b]Theatrical AutoMarksman[/b][/size]
+
+While Henry aims a [b]bow[/b], a [b]crossbow[/b] or a [b]hand cannon[/b], the camera turns gently onto the head of the person (or the chest of the animal) nearest the centre of your view, so that the arrow, bolt or ball, not the middle of the screen, meets it. [b]F4[/b] switches it on and off. You still draw, aim and release yourself.
+
+[list]
+[*]People come first; your horse and dogs are left alone.
+[*]Nobody behind a wall, terrain or other solid cover is picked, and a shot whose arc would hit something on the way is not taken.
+[*]The lock is soft: move the mouse and it lets go; look away and it picks whoever you are now looking at.
+[*]An optional marker shows where a shot loosed now would hit (green on the head bone) and marks the head.
+[*]It allows for drop, air drag and a target that is walking or running.
+[/list]
+
+[b]Real ballistics, not the crosshair[/b]
+The arrow does not fly where the camera looks: the game launches it from the bow's own arrow joint, along the bow's axis, which sits a couple of degrees off the view and moves as the bow sways. The mod reads that live pose every frame (the same way the game's own trajectory preview does) and the speed the game's formula gives for your bow and arrow, and steers until that real path crosses the head. A hand cannon is aimed through its fuse until the ball actually leaves.
+
+[b]Calm camera[/b]
+It only starts turning once the weapon is drawn and steady (never while it is raised, reloaded or the next arrow is nocked), follows the bow's slow sway but not its tremor, and turns and stops smoothly. While the assist is on, the game's own aim sway is reduced to SwayStrength percent (25 by default); switching it off gives the game's sway back at once.
+
+[b]That is all it does.[/b] The game flies the arrow, sways the bow with Henry's skill and stamina, and decides whether the shot hits. Nothing is teleported, no hit is forced, and no item, arrow or stat is changed.
+
+[b]Crossbows[/b]
+A crossbow is aimed the same way, through its own live firing pose. Its animation moves more than a bow, so the camera follows only part of that motion and keeps the target until you move the mouse or lose sight of it. Set Crossbows=0 to leave crossbows completely to you.
+
+[b]Optional file: Experimental Crossbow[/b]
+Crossbow aiming works reasonably well but has had less testing than bows and hand cannons. The optional [b]Experimental Crossbow[/b] file is the same mod with the detailed crossbow log on (CrossbowPoseDiagnostics=1, DebugLog=1), for anyone who wants to help test it. Install it instead of the main file (same folder) and send kcd2_automarksman.log with reports; the partial-cover limitation below applies to it too.
+
+[b]Requirements[/b]
+[list]
+[*][url=https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332]Kingdom Come Script Extender (KCSE)[/url] by JerryYOJ
+[*][url=https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381]Address Library For KCSE[/url] by JerryYOJ
+[/list]
+
+[b]Installation[/b]
+[list]
+[*][b]Vortex:[/b] install as usual.
+[*][b]Manual:[/b] copy the [i]theatrical_automarksman[/i] folder from the archive into [i]<game>\Mods\[/i]. You should end up with [i]<game>\Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.dll[/i].
+[*][b]Uninstall:[/b] delete that folder.
+[/list]
+Only download our mods from Nexus Mods (Flubbermunchkin) or our GitHub. They never come with an installer or .exe.
+
+[b]Settings[/b] ([i]Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini[/i])
+[list]
+[*][b]Toggle=F4[/b]: on/off key (F1-F12, a letter or digit, or a symbol key such as ])
+[*][b]StartEnabled=1[/b]: 1 = on from the start
+[*][b]Notices=1[/b]: short ON/OFF message when you press the key
+[*][b]Bows=1, Crossbows=1, HandCannons=1[/b]: which weapons are aimed for (0 = left to you, camera and sway as vanilla)
+[*][b]ConeDegrees=10, MaxDistance=80[/b]: how far from the centre of the view, and how far away, a target may be
+[*][b]RequireClearShot=1[/b]: never aim at someone behind solid cover
+[*][b]TurnSpeed=115, Responsiveness=9[/b]: how fast the camera turns and closes the error
+[*][b]HostileOnly=0[/b]: 1 = people only while they are in combat
+[*][b]TargetPeople/Animals/Horses/Dogs[/b]: 1, 1, 0, 0
+[*][b]ShowImpactMarker=1[/b]: draw the predicted impact and the head
+[*][b]SwayStrength=25[/b]: the game's own aim sway while the assist is on, % (per weapon: SwayStrengthBow/Crossbow/Gun)
+[*][b]DebugLog=0[/b]: 1 = detailed log, including every shot's real miss
+[*][b]...[/b]: more in the .ini and the README
+[/list]
+
+[b]Compatibility[/b]
+Works next to other KCSE plugins that hook the same game update (Horse Route Follow, Theatrical AutoSharpening). Played with Arrow Arc and Faster Bow Charge Duration installed; mods that change bow, crossbow or arrow stats are fine, as the mod reads the live weapon and the game's own speed formula.
+
+The ON/OFF messages come from the mod's Localization folder, which the game only loads if [i]theatrical_automarksman[/i] is listed in [i]<game>\Mods\mod_order.txt[/i]. Vortex does that for you; with a manual install add the line yourself if that file exists.
+
+[b]Known limitations[/b]
+[list]
+[*][b]Partial cover:[/b] the mod checks for a clear path to the head only. Someone behind a fence, railing, window bars or a low wall may be skipped even when part of them is visible, and a shot that would clip the top of the cover is not taken. Line of sight also ignores other people standing in the way.
+[*]The aim assumes a full draw; an arrow loosed early is slower and drops more.
+[*]The game fires a moment after you release, so a weapon still swaying then can move the shot a little. A shaky, low-skill or tired Henry still misses.
+[/list]
+
+[b]Game updates[/b]
+The mod uses no fixed memory addresses: it finds the game code it needs by pattern at startup. Built and checked for the Steam version 1.5.x (build 15693); other stores and versions are untested. If a game update changes that code, the mod switches itself off and changes nothing, and its log says so.
+
+[b]Bug reports[/b]
+Please set DebugLog=1 in the .ini, reproduce the problem and attach [i]kcd2_automarksman.log[/i] (next to the DLL, rewritten every session).
+
+[b]More from the Theatrical series[/b]
+Theatrical AutoForge, Theatrical Autobrew, Theatrical AutoSharpening, Theatrical AutoLockpick, Theatrical AutoDice, Theatrical AutoPickpocket, Theatrical AutoFollow.
+
+[b]Credits[/b]
+JerryYOJ for KCSE, the Address Library and libKCD2 (GPL-3.0), whose public research notes on the player's look angles, bow controller and projectiles this mod builds on. inkcrow - Arrow Arc, which inspired the arc-prediction idea (no code was used).
+Source code (GPL v3): [url=https://github.com/EvanJGagnon/KCD2-Mods]github.com/EvanJGagnon/KCD2-Mods[/url]. Made with AI assistance (Claude).
+
+FILES
+Main file: TheatricalAutoMarksman-1.0.0.zip
+  Name: Theatrical AutoMarksman
+  Version: 1.0.0
+  Description: Aim assist for bows, crossbows and hand cannons through the weapon's real launch pose (F4).
+Optional file: TheatricalAutoMarksman-ExperimentalCrossbow-1.0.0.zip
+  Name: Theatrical AutoMarksman - Experimental Crossbow
+  Version: 1.0.0
+  Description: EXPERIMENTAL crossbow test build: the same mod with the detailed crossbow log on. Install instead of the main file (same folder). Crossbow aiming is less tested than bows and hand cannons and shares the partial-cover limitation; please send kcd2_automarksman.log with reports.
+
+CHANGELOG (Nexus "Logs" tab)
+1.0.0 - First release: bows, crossbows and hand cannons.
+        - Line of sight: nobody behind solid cover is aimed at, and a blocked arc is not taken.

@@ -1,0 +1,75 @@
+NAME
+Theatrical AutoDice
+
+CATEGORY
+Gameplay
+
+VERSION
+1.0.0
+
+SUMMARY (242/350 characters)
+Henry plays his own turns at dice while you watch: after every throw he sets aside the dice worth keeping, then throws again or passes, with the same game actions you use. The game throws, scores and pays; Henry can lose. F3 starts and stops.
+
+DESCRIPTION (BBCode)
+[size=4][b]Theatrical AutoDice[/b][/size]
+
+Henry plays his own turns at the dice table while you watch. After every throw he looks the dice over, sets aside the ones worth keeping one at a time, and then either throws the rest again or passes, with the same game actions you use (hold, score and throw again, pass).
+
+The game throws the dice, with each die's own weights, scores them, calls busts and pays out; the mod never changes the dice, the scores or the money. [b]Henry can lose.[/b]
+
+[b]How he decides[/b]
+For each throw the mod weighs every way of setting dice aside against what the dice he would throw next are likely to roll (it knows the side weights of Henry's own dice, so a lucky die is worth keeping in play), how far he is from the target score, and how close the opponent is to winning. Far ahead he plays it safe; when the opponent is about to win he presses on.
+
+[b]How to use[/b]
+[list=1]
+[*]Sit down to a game of dice as usual (choose your dice and badges, place the bet).
+[*]Press [b]F3[/b]. From then on Henry plays each of his turns himself. Press F3 again at any time to play by hand.
+[*]Badges are left to you: use one by hand whenever you like; Henry carries on afterwards.
+[/list]
+
+[b]Requirements[/b]
+[list]
+[*][url=https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332]Kingdom Come Script Extender (KCSE)[/url] by JerryYOJ
+[*][url=https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381]Address Library For KCSE[/url] by JerryYOJ
+[/list]
+
+[b]Installation[/b]
+[list]
+[*][b]Vortex:[/b] install as usual.
+[*][b]Manual:[/b] copy the [i]theatrical_autodice[/i] folder from the archive into [i]<game>\Mods\[/i]. You should end up with [i]<game>\Mods\theatrical_autodice\KCSE\Plugins\kcd2_autodice.dll[/i].
+[*][b]Uninstall:[/b] delete that folder.
+[/list]
+Only download our mods from Nexus Mods (Flubbermunchkin) or our GitHub. They never come with an installer or .exe.
+
+[b]Settings[/b] ([i]Mods\theatrical_autodice\KCSE\Plugins\kcd2_autodice.ini[/i])
+[list]
+[*][b]Play=F3[/b]: start / stop (F1-F12, a letter or digit, or a symbol key such as ])
+[*][b]SpeedPercent=100[/b]: how fast Henry plays (50 = slow and deliberate, 200 = brisk)
+[*][b]RiskPercent=100[/b]: above 100 he presses on more, below 100 he banks sooner
+[*][b]DebugLog=0[/b]: 1 = detailed log for bug reports
+[/list]
+
+[b]Compatibility[/b]
+Uses only the game's own dice actions. Badges that change scoring are scored by the game itself, but Henry's plan does not take them into account; a mod that changes the scoring rules can make his choices worse.
+
+[b]Game updates[/b]
+The mod uses no fixed memory addresses: it finds the game code it needs by pattern at startup. Built and checked for the Steam version 1.5.x (build 15693); other stores and versions are untested. If a game update changes that code, the mod switches itself off and changes nothing, and its log says so.
+
+[b]Bug reports[/b]
+Please set DebugLog=1 in the .ini, reproduce the problem and attach [i]kcd2_autodice.log[/i] (next to the DLL, rewritten every session).
+
+[b]More from the Theatrical series[/b]
+Theatrical AutoForge, Theatrical Autobrew, Theatrical AutoSharpening, Theatrical AutoLockpick, Theatrical AutoPickpocket, Theatrical AutoFollow, Theatrical AutoMarksman.
+
+[b]Credits[/b]
+JerryYOJ for KCSE, the Address Library and libKCD2 (GPL-3.0), whose public class layouts of the dice game helped find the game's dice code.
+Source code (GPL v3): [url=https://github.com/EvanJGagnon/KCD2-Mods]github.com/EvanJGagnon/KCD2-Mods[/url]. Made with AI assistance (Claude).
+
+FILES
+Main file: TheatricalAutoDice-1.0.0.zip
+  Name: Theatrical AutoDice
+  Version: 1.0.0
+  Description: Henry plays his own turns at dice (F3).
+
+CHANGELOG (Nexus "Logs" tab)
+1.0.0 - First release.
