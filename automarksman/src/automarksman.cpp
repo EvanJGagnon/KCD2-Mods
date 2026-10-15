@@ -46,6 +46,7 @@
 #include "mk_ballistics.h"
 #include "mk_target.h"
 #include "mk_pose.h"
+#include "mk_visibility.h"
 #include <cctype>
 #include <cstring>
 
@@ -72,6 +73,11 @@ static const char* SIG_MKITER      = "48 89 74 24 10 57 48 83 EC 20 48 8B 81 90 
 static const char* SIG_ITER_NEXT   = "48 8B D1 48 8B 49 10 48 8B 42 08 48 3B 48 40 74 ?? 48 8B 41 18 48 8B 09";                // CActorIterator vtbl[2] 0x4CB02C
 static const char* SIG_ITER_REL    = "40 53 48 83 EC 20 FF 49 18 48 8B D9 83 79 18 00 7F ?? 48 8B 01 33 D2 FF 10";              // CActorIterator vtbl[4] 0x16F5194
 static const char* SIG_DEADBYHP    = "48 8B C1 48 8B 89 68 06 00 00 48 85 C9 74 ?? 48 8B 01 48 FF 60 30";                      // C_Actor vtbl[38] IsDeadByHealth 0x64583C
+// This game's own physics ray-cast wrapper, verified by a unique caller in
+// C_ActorActionShootingFiring; exact Win64 argument ABI is established by
+// WHGame.dll build 15693's wrapper, not assumed from a different CryEngine SDK.
+static const char* SIG_PHYS_REF = "48 8B 0D ?? ?? ?? ?? 4C 8D 45 B0 48 89 45 78 48 8D 55 98 48 8D 05 ?? ?? ?? ?? 41 B9 1F 01 00 00";
+static const char* SIG_PHYS_RAY = "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 4C 89 70 20 55 48 8D 68 F1 48 81 EC 90 00 00 00 48 8B DA 49 8B F8 33 D2 4C 8B F1";
 static const char* SIG_LAUNCH      = "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 4C 89 70 20 55 48 8D 68 D8 48 81 EC 20 01 00 00 0F 29 70 E8 48 8B D9 0F 29 78 D8"; // CProjectile vtbl[35] 0x2AA85A8
 // Arrows: CArrow vtbl[35] is a 5-byte jmp to CProjectile::Launch (checked at startup); hooking only the
 // CProjectile slot misses every arrow (round 1).
@@ -140,6 +146,10 @@ typedef int16_t (*JointId_t)(void*, const char*);
 typedef const float* (*AbsJoint_t)(void*, int);
 typedef bool (*InCombat_t)(void*);
 typedef void* (*Loadout_t)(void*);
+// WHGame wrapper accepts Vec3* origin/dir, objTypes, flags, hit buffer, maxHits,
+// skip entities/count, foreign data/id, and a debug tag (12 arguments).
+typedef int (*PhysRay_t)(void*, const V3*, const V3*, int, unsigned, void*,
+                         int, void*, int, void*, int, const char*);
 typedef void* (*WSys_t)();
 typedef void  (*LaunchPose_t)(void*, float*, void*, void*);
 typedef float (*BowSpeedFn_t)(void*, float, void*, void*, void*);
@@ -148,6 +158,7 @@ static struct Game {
     uintptr_t fwGlobal, sysGlobal, vtPlayer, vtMwCtrl, vtEntity, vtEntSys, vtActorSys, vtIter, vtProjectile, vtArrow, vtSS;
     uintptr_t vtChar, vtDefSkel, vtPose, imgLo, imgHi, textLo, textHi;
     uintptr_t vtHuman, vtNpc, vtHorse, vtDog, vtAnimal;
+    uintptr_t physicsGlobal = 0; PhysRay_t physRay = nullptr;
     GetChar_t getChar; SlotTM_t slotTM; CiGet_t ciPose, ciSkel; JointId_t jointId; AbsJoint_t absJoint; Launch_t launchArrow;
     GetClientActor_t clientActor; GetViewCamera_t viewCamera; GetEntity_t getEntity; GetBounds_t bounds;
     GetActor_t getActor; MkIter_t mkIter; IterNext_t iterNext; IterRel_t iterRel; uintptr_t deadByHp;
@@ -161,6 +172,7 @@ static const char* const SUB_NAME[SUB_N] = {"drawing", "raising the weapon", "ai
 // ---------------- settings ----------------
 static kc::Hotkey g_key;
 static bool g_on = false, g_dead = false, g_lead = true, g_hostileOnly = false, g_headBone = true, g_remember = true, g_marker = true;
+static bool g_losEnabled = true, g_losFaulted = false; static double g_losLogT = -100;
 static mk::TargetPolicy g_policy; static mk::Lock g_lockState;
 static float g_maxDist = 80.f, g_headDrop = 0.13f, g_headAbove = 0.08f, g_overrideS = 0.4f;
 static mk::Steer g_steer;
@@ -507,12 +519,52 @@ static void log_head(uintptr_t ent, bool used) {
          (unsigned long long)b.poVt, b.id, g_boneAt.x, g_boneAt.y, g_boneAt.z, b.local.x, b.local.y, b.local.z, bb[2], bb[5]);
 }
 
+// Solid-world ray query: static props, terrain, doors, rigid/sleeping physics
+// (ent_static|ent_sleeping_rigid|ent_rigid|ent_terrain = 0x107).
+// Excludes characters to avoid immediately hitting Henry's own physical body,
+// and intentionally errs on denying a lock if the query cannot be verified.
+// Read only, no changes to any game physical entities or projectile velocity.
+static bool solid_segment_clear(const V3& from, const V3& to) {
+    if (!g_losEnabled) return true; // configurable compatibility opt-out
+    if (g_losFaulted || !G.physicsGlobal || !G.physRay ||
+        !kc::readable(G.physicsGlobal, sizeof(void*))) return false;
+    V3 ray = to - from; float dist = ray.len();
+    if (!std::isfinite(dist) || dist < 0.001f) return false;
+    // End 10 cm before the requested point: a solid target-adjacent structure
+    // should not appear to occlude its own visible surface.
+    ray = ray * (std::max(0.001f, dist - 0.10f) / dist);
+    alignas(16) uint8_t hit[128] = {};
+    __try {
+        void* world = *(void**)G.physicsGlobal;
+        if (!world || !kc::readable((uintptr_t)world, 8)) { g_losFaulted = true; return false; }
+        // rwi_stop_at_pierceable=0xf, one solid hit. The game's raycast wrapper
+        // calls IPhysicalWorld virtual slot +0x118 (confirmed in build 15693).
+        int n = G.physRay(world, &from, &ray, 0x107, 0xF,
+                          hit, 1, nullptr, 0, nullptr, 0, "AutoMarksmanLOS");
+        if (n == 0) return true;
+        if (n != 1) { g_losFaulted = true; logf("visibility physics ray returned %d hits for a 1-hit buffer; all locks disabled", n); return false; }
+        float d = *(const float*)hit; // ray_hit.dist is at offset zero in this game.
+        if (!std::isfinite(d) || d < -0.001f || d > dist + 1.f) {
+            g_losFaulted = true; logf("visibility ray data invalid; all locks disabled"); return false;
+        }
+        if (kc::g_debug && now_s() - g_losLogT > 3.0) {
+            g_losLogT = now_s();
+            logf("visibility: solid collision at %.1f m of %.1f m; actor behind obstruction excluded", d, dist);
+        }
+        return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_losFaulted = true;
+        logf("visibility physics query faulted; target locking disabled for this session (safe fail-closed)");
+        return false;
+    }
+}
 // Candidates near the centre of the view, then the soft-lock decision (mk::Lock).
 static mk::Lock::Why pick(const V3& camPos, const V3& camFwd, bool handsOn) {
     uintptr_t as = actor_system(); if (!as) return mk::Lock::NONE;
     void* it = nullptr; G.mkIter((void*)as, &it);
     if (!it || !kc::is_a((uintptr_t)it, G.vtIter)) return mk::Lock::KEPT;
-    static mk::Cand c[256]; int n = 0, seen = 0, calm = 0;
+    static mk::Cand c[256], visible[256]; static V3 places[256];
+    int n = 0, seen = 0, calm = 0;
     float wide = std::max(g_policy.cone * g_policy.keep, mk::rad(20.f));
     for (void* a; (a = G.iterNext(it)) != nullptr && seen < 4096 && n < 256; seen++) {
         uintptr_t actor = (uintptr_t)a; if (actor == g_player) continue;
@@ -527,10 +579,27 @@ static mk::Lock::Why pick(const V3& camPos, const V3& camFwd, bool handsOn) {
         bool dead = ((DeadByHp_t)((*(uintptr_t**)actor)[38]))(a);
         if (dead) continue;
         if (kind == mk::K_PERSON && g_hostileOnly && !in_combat(actor)) { calm++; continue; }   // optional: fights only
-        c[n++] = mk::Cand{F<uint32_t>(ent, E_ID), ang, d, kind};
+        c[n] = mk::Cand{F<uint32_t>(ent, E_ID), ang, d, kind};
+        places[n] = p; ++n;
     }
     G.iterRel(it);
-    mk::Lock::Why why = g_lockState.update(c, n, g_policy, handsOn);
+    // Traces only centre-ranked candidates, prioritizing the current lock.
+    // A target not traced because of the bounded 8-candidate budget is
+    // deliberately omitted, never implicitly treated as visible.
+    mk::LivePose launch{}; float speed = 0;
+    bool haveLaunch = g_losEnabled && g_sub == SUB_AIMING &&
+        read_pose(launch, &speed) && speed > 5.f && (launch.pos - camPos).len() < 3.f;
+    const mk::Flight& fl = flight_use();
+    int clearN = g_losEnabled ? mk::visible_candidates(c, places, n, g_policy, g_lock, visible, 8,
+        [&](const mk::Cand& candidate, const V3& pt) {
+            if (!solid_segment_clear(camPos, pt)) return false; // visual LOS first
+            if (!haveLaunch) return true; // not yet in a stable shooting state
+            mk::Solution shot = mk::solve(launch.pos, pt, V3{}, speed, fl);
+            return mk::projectile_path_clear(launch.pos, shot, speed, fl,
+                [&](const V3& a, const V3& b) { return solid_segment_clear(a,b); });
+        }) : n;
+    mk::Lock::Why why = g_lockState.update(g_losEnabled ? visible : c,
+                                         clearN, g_policy, handsOn);
     static double s_calmLogT = -100;
     if (!g_lockState.id && calm && now_s() - s_calmLogT > 5.0) { s_calmLogT = now_s(); logf("%d %s in view not in combat - not targeted (HostileOnly=1)", calm, calm == 1 ? "person" : "people"); }
     return why;
@@ -1017,7 +1086,7 @@ static DWORD WINAPI ScriptUpdateAudit(LPVOID) {
 
 // ---------------- resolve ----------------
 struct Found { uintptr_t ssUpdate, ssExec, fwGlobal, clientActor, sysGlobal, viewCamera, getEntity, bounds, getActor, mkIter, iterNext, iterRel, deadByHp, launch,
-                launchArrow, getChar, slotTM, ciPose, ciSkel, jointId, absJoint, jointCount, jointName, loadout, wsys, launchPose, bowSpeed; };
+                launchArrow, getChar, slotTM, ciPose, ciSkel, jointId, absJoint, jointCount, jointName, loadout, wsys, launchPose, bowSpeed, physGlobal, physRay; };
 static bool resolve(kc::Resolver& R, Found& f) {
     G.vtSS = R.vtable("CScriptSystem", ".?AVCScriptSystem@@", 0);
     uintptr_t cur = G.vtSS ? ((uintptr_t*)G.vtSS)[1] : 0;
@@ -1096,6 +1165,14 @@ static bool resolve(kc::Resolver& R, Found& f) {
         if (!R.verify("bow launch pose", f.launchPose, SIG_LAUNCHPOSE)) f.launchPose = 0;
         if (!R.verify("arrow speed formula", f.bowSpeed, SIG_BOWSPEED)) f.bowSpeed = 0;
     }
+    // The build's own shooting function calls the same 12-argument physics
+    // wrapper, making the raycast ABI and world-global signature verifiable.
+    uintptr_t rayCaller = R.find("ballistic physics ray caller", SIG_PHYS_REF);
+    if (rayCaller) {
+        f.physGlobal = R.riprel("gEnv->pPhysicalWorld", rayCaller + 3);
+        f.physRay = R.branch("IPhysicalWorld raycast wrapper", rayCaller + 0x63);
+        if (!R.verify("IPhysicalWorld raycast wrapper signature", f.physRay, SIG_PHYS_RAY)) f.physRay = 0;
+    }
     R.find("actor combat state (layout)", SIG_COMBATMODE);
     R.find("look-angle tick (layout)", SIG_LOOKTICK);
     R.find("bow aim start (layout)", SIG_AIMSTART);
@@ -1136,6 +1213,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_remember = kc::ini_int("Options", "RememberBow", 1) != 0;
     g_policy.animals = kc::ini_int("Options", "TargetAnimals", 1) != 0;
     g_lead = kc::ini_int("Options", "LeadMovingTargets", 1) != 0;
+    g_losEnabled = kc::ini_int("Options", "RequireClearShot", 1) != 0;
     g_live = kc::ini_int("Options", "BowPose", 1) != 0;
     {   // Native sway while the assist is on: % of the game's own (100 = vanilla, 0 = none).
         int all = std::max(0, std::min(100, kc::ini_int("Options", "SwayStrength", 25)));
@@ -1149,7 +1227,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_ctl.gate.settle = std::max(0, std::min(2000, kc::ini_int("Options", "SettleMs", 200))) / 1000.f;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.6.0 LOCAL DIAGNOSTIC 4 (localized F4 notices) (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.6.0 LOCAL DIAGNOSTIC 6 (physics line of sight) (game ts 0x%08X)", R.im.timestamp);
     // Other Theatrical mods and Horse Route Follow also install on CScriptSystem::Update.
     // Their init threads are concurrent, so installing immediately after KCSE load may
     // leave our hook underneath a later non-chaining hook. Let other plugins settle first.
@@ -1167,6 +1245,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_jointCount = (JointCount_t)f.jointCount; g_jointName = (JointName_t)f.jointName;
     G.loadout = (Loadout_t)f.loadout; G.wsys = (WSys_t)f.wsys; G.launchPose = (LaunchPose_t)f.launchPose; G.bowSpeed = (BowSpeedFn_t)f.bowSpeed;
     G.imgLo = R.im.base; G.imgHi = R.im.end; G.textLo = R.im.text0; G.textHi = R.im.text1;
+    G.physicsGlobal = f.physGlobal; G.physRay = (PhysRay_t)f.physRay;
     load_calib();
     kc::write_ptr(&((void**)G.vtProjectile)[35], (void*)&LaunchHook);
     kc::write_ptr(&((void**)G.vtArrow)[35], (void*)&LaunchHookArrow);
@@ -1199,6 +1278,8 @@ static DWORD WINAPI Init(LPVOID) {
          kc::key_name(g_key.vk, kn, sizeof kn), "on/off", g_on ? "ON" : "OFF", mk::deg(g_policy.cone), g_maxDist, mk::deg(g_steer.maxRate), g_cal.speed,
          g_hostileOnly ? "people only when in combat" : "anyone you aim at", g_headBone ? "head bone" : "head from box");
     logf("local diagnostics: crossbow firing pose %s, in-game notices %s", g_crossbowDiag ? "ON" : "OFF", g_notices ? "ON" : "OFF");
+    logf("visibility: %s, physics ray = %s, solid props/terrain/rigid blockers; max 8 candidates per choice",
+         g_losEnabled ? "required" : "not required", G.physRay && G.physicsGlobal ? "verified" : "unavailable");
     logf("targets: people %s, animals %s, horses %s, dogs %s; impact marker %s", g_policy.people ? "yes" : "no", g_policy.animals ? "yes" : "no",
          g_policy.horses ? "yes" : "no", g_policy.dogs ? "yes" : "no", g_marker ? "on" : "off");
     logf("native aim sway while the assist is on: bow %.0f%%, crossbow %.0f%%, hand cannon %.0f%% of the game's%s", g_swayStrength[1] * 100.f, g_swayStrength[2] * 100.f,

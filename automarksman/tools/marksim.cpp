@@ -9,6 +9,7 @@
 #include "../src/mk_ballistics.h"
 #include "../src/mk_target.h"
 #include "../src/mk_pose.h"
+#include "../src/mk_visibility.h"
 #include <cstdio>
 #include <cstdint>
 #include <vector>
@@ -695,6 +696,59 @@ int main() {
         FiringTargetPin noLock; noLock.state(true, 0);
         check(!noLock.may_select() && !noLock.may_steer(),
               "a shot clicked without target cannot acquire a bystander during fuse");
+    }
+    printf("31. physics LOS: blocked nearer target never outranks visible farther target\n");
+    {
+        TargetPolicy policy; policy.cone=rad(10.f);
+        Cand in[]={{101,rad(0.1f),15.f,K_PERSON},{102,rad(2.f),20.f,K_PERSON},
+                   {103,rad(15.f),25.f,K_PERSON}};
+        V3 positions[]={{0,15,1},{1,20,1},{2,25,1}};
+        Cand visible[3];
+        int query=0;
+        auto rays=[&](const Cand& c,const V3& p) {
+            query++;
+            return c.id==102 && p.y==20;
+        };
+        int k=visible_candidates(in,positions,3,policy,0,visible,12,rays);
+        check(k==1 && visible[0].id==102 && query==2,
+              "hidden centre candidate omitted and visible second candidate selected");
+        Lock locked;locked.update(visible,k,policy,false);
+        check(locked.id==102,"lock chooses unobstructed person, not the hidden one");
+        k=visible_candidates(in,positions,3,policy,101,visible,12,rays);
+        locked.id=101;locked.update(visible,k,policy,false);
+        check(locked.id==102,"occluded existing target is dropped and reacquisition occurs");
+        query=0;k=visible_candidates(in,positions,3,policy,0,visible,1,rays);
+        check(k==0 && query==1,"unchecked lower-priority actors fail closed when ray budget exhausted");
+        k=visible_candidates(in,positions,3,policy,0,visible,12,
+              [&](const Cand&,const V3&){return false;});
+        check(k==0,"all actors invisible yields no lock");
+    }
+    printf("32. physics LOS: curved shot segments catch walls and roofs\n");
+    {
+        Flight f; f.g=9.81f; f.k=0;
+        V3 from{0,0,1.6f},to{0,45,1.8f};
+        Solution sol=solve(from,to,V3{},70.f,f);
+        check(sol.ok,"solver produced a valid arced shot");
+        int n=0;
+        auto clear=[&](const V3&a,const V3&b) {
+            n++;
+            return true;
+        };
+        check(projectile_path_clear(from,sol,70.f,f,clear)&&n>=6,
+              "full arc checked with multiple line segments");
+        auto wall=[&](const V3&a,const V3&b) {
+            return !((a.y<24.f) && (b.y>21.f));
+        };
+        check(!projectile_path_clear(from,sol,70.f,f,wall),
+              "wall between crossbow and target prevents shooting lock");
+        auto roof=[&](const V3&a,const V3&b) {
+            float za=(a.z+b.z)*0.5f;
+            return !(a.y<37 && b.y>29 && za>1.7f);
+        };
+        check(!projectile_path_clear(from,sol,70.f,f,roof),
+              "roof clipping elevated ballistic arc prevents shooting lock");
+        Solution invalid{};check(!projectile_path_clear(from,invalid,70.f,f,clear),
+              "unreachable target is not treated as a clear path");
     }
     printf("%s (%d failed)\n", g_fail ? "FAILED" : "ALL PASSED", g_fail);
     return g_fail;
