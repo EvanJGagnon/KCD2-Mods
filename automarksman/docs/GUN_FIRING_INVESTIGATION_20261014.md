@@ -17,3 +17,11 @@
 - This is not a gun weapon-sway cure. It prevents a class of unintended target jumps and preserves player input without changing projectile physics, weapon pose, or skill-dependent sway.
 - Added marksim test 30 for the switched-bystander situation, user override, resumption after Firing, and shot started without target; existing 1-29 and build signatures/selftest pass.
 - Next investigation: separate native gun weapon aiming/firing pose animation from player view sway; may need a reversible player-only animation-layer change, but MUST first verify that the gun projectile still spawns from a correct launch axis and unaffected NPCs/bow/crossbow.
+
+## Original firearm animation asset audit
+
+- Inspected original Data/Animations.pak without modifying/installing animation files.
+- In Animations/Mannequin/ADB/kcd_male_database.adb: player rifle aim scope r_rifle+player+prime+Scope_AimPose blends rifle_aimposes_aim_upperbody_player (Loop), with AimSmoothing explicitly SmoothEnable=false and CameraNear.
+- r_rifle+charge+prime uses rifle_idle_aim (Loop). Player/non-player r_rifle shooting fragments both reference rifle_shot_over (one-shot); stealth references rifle_stealth_shot. Rifle shot animation therefore is not proven player-only; DO NOT replace it globally without guarding NPCs.
+- Animations/assets/firearms/hand_cannon.animevents refers to animations/assets/firearms/rifle_shot_over.caf with ignition effect at normalized time 0.145 and muzzle-front effect around 0.58. Effects alone do not identify the game's projectile launch time, which is measured by CProjectile hook.
+- Likely avenue for large post-click aim deviation: separate the rifle_shot_over pose motion and the player rifle upperbody aim-pose layer from native camera sway (which was only ~0.3 deg/s scaled). Needs isolated reversible animation/IK test and projectile-pose verification before a sway remedy. Do not copy unsupported edits from third-party mods or suppress essential firing animation events.
