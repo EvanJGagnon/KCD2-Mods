@@ -109,3 +109,18 @@ smoothed velocity. Steering: feed-forward of the aim point's own angular motion 
 correction, capped at TurnSpeed on the combined turn. `tools/marksim.cpp` tests all of it against an
 independent step-integrated model (solver within 5 cm, flight fits, learning an unknown bow with
 offsets, moving targets, rate cap, bow sway still causing misses).
+
+## Round 2 findings (0.3.0)
+
+- HostileOnly=1 hid every villager ("9 people in view not in combat"), so the only targets left were Henry's
+  dog and horse. Now: HostileOnly=0 by default; actors are classed by their vtable (`C_Human`/`C_NPCActor`
+  person, `C_Horse`, `C_Dog`, `C_Animal`); horses and dogs are skipped by default; people beat animals.
+- Soft lock (`src/mk_target.h`, tested in marksim): while the mouse moves the mod does not steer and drops a
+  target that leaves the cone; afterwards the choice is fresh (no preference for the old target, so no swing
+  back); the turn rate eases in over 0.4 s after taking a target or after the mouse.
+- The one measured arrow (76.2 m/s) left 2.47 deg above the camera ray. Steering now aims the predicted
+  impact (camera + measured offsets + speed + drop) at the head, logs the predicted gap, and can draw it
+  (`System.DrawLine` through ExecuteBuffer). Arrow Arc was consulted for behaviour only; no code used.
+- "Too short to measure" with 96 samples: the arrow entity moves with the physics step, so at 135 fps the same
+  position repeats and the old fit cut the track there. The track now keeps distinct positions only and the
+  fit uses height against distance (plus a time-offset-tolerant distance/time term for drag).

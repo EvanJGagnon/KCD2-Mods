@@ -22,8 +22,15 @@
 // bow) uses the ArrowSpeed guess from the .ini; the game says so on screen when that is the case.
 //
 // Aim point: the "Bip01 Head" bone of a person (read from the character's skeleton pose, like the game's
-// own Entity.GetBonePos), the chest of an animal.  By default only people in combat are targeted, so
-// civilians walking by are left alone (HostileOnly in the .ini).
+// own Entity.GetBonePos), the chest of an animal.  Which target: the person (or, failing that, the
+// animal) nearest the centre of the view; horses and dogs are skipped by default (mk_target.h).  The
+// lock is soft: moving the mouse pauses the assist, looking away from the target releases it, and the
+// next choice starts from wherever the player now looks.
+//
+// What is steered: not the centre of the screen but the predicted impact.  Every frame the mod works out
+// where an arrow loosed now would cross the target's distance (from the measured launch speed, offsets,
+// gravity and drag) and turns the camera until that point is on the head.  ShowImpactMarker=1 draws that
+// point (and the head) in the world with the game's own System.DrawLine.
 //
 // Use: F4 (kcd2_automarksman.ini) switches the assist on or off; it only acts while a bow is drawn.
 // Game code is found by RTTI + signature at startup (kcd2_common.h); on a mismatch nothing is hooked.
@@ -34,6 +41,7 @@
 // 15693 for this mod (docs/NOTES.md).  Arrow Arc (inkcrow) was used as a concept reference only; no code.
 #include "kcd2_common.h"
 #include "mk_ballistics.h"
+#include "mk_target.h"
 
 using kc::logf;
 using mk::V3;
@@ -107,6 +115,7 @@ typedef bool (*InCombat_t)(void*);
 static struct Game {
     uintptr_t fwGlobal, sysGlobal, vtPlayer, vtMwCtrl, vtEntity, vtEntSys, vtActorSys, vtIter, vtProjectile, vtArrow, vtSS;
     uintptr_t vtChar, vtDefSkel, vtPose, imgLo, imgHi, textLo, textHi;
+    uintptr_t vtHuman, vtNpc, vtHorse, vtDog, vtAnimal;
     GetChar_t getChar; SlotTM_t slotTM; CiGet_t ciPose, ciSkel; JointId_t jointId; AbsJoint_t absJoint; Launch_t launchArrow;
     GetClientActor_t clientActor; GetViewCamera_t viewCamera; GetEntity_t getEntity; GetBounds_t bounds;
     GetActor_t getActor; MkIter_t mkIter; IterNext_t iterNext; IterRel_t iterRel; uintptr_t deadByHp;
@@ -115,15 +124,17 @@ static struct Game {
 
 // ---------------- settings ----------------
 static kc::Hotkey g_key;
-static bool g_on = false, g_dead = false, g_people = true, g_animals = true, g_lead = true, g_hostileOnly = true, g_headBone = true, g_remember = true;
-static float g_cone = mk::rad(10.f), g_maxDist = 80.f, g_headDrop = 0.13f, g_headAbove = 0.08f, g_overrideS = 0.4f;
+static bool g_on = false, g_dead = false, g_lead = true, g_hostileOnly = false, g_headBone = true, g_remember = true, g_marker = true;
+static mk::TargetPolicy g_policy; static mk::Lock g_lockState;
+static float g_maxDist = 80.f, g_headDrop = 0.13f, g_headAbove = 0.08f, g_overrideS = 0.4f;
 static mk::Steer g_steer;
 static mk::Calib g_cal;
 
 // ---------------- per-frame state (game thread) ----------------
 static LARGE_INTEGER g_qpf;
 static double now_s() { LARGE_INTEGER c; QueryPerformanceCounter(&c); return (double)c.QuadPart / (double)g_qpf.QuadPart; }
-static double g_lastT = 0, g_aimT0 = 0, g_userUntil = 0, g_pickT = 0, g_logT = 0;
+static double g_lastT = 0, g_aimT0 = 0, g_userUntil = 0, g_pickT = 0, g_logT = 0, g_acqT = 0;
+static char g_markerLua[1024]; static volatile LONG g_markerReady = 0;
 static uintptr_t g_player = 0, g_checked = 0; static uint32_t g_playerId = 0; static int g_bad = 0;
 static bool g_wasAiming = false, g_outOfRange = false, g_toldUncal = false;
 static double g_releaseT = -10;                                  // last time the bow stopped being drawn
@@ -134,7 +145,7 @@ static float g_errStart = 0; static int g_errFrames = 0;        // "does the cam
 static const char* volatile g_notice = nullptr;
 
 // What the aim looked like on the last frame the mod steered (for the per-shot log).
-static struct { uint32_t target; V3 point; float dist, errYaw, errPitch, speed; bool bone; double t; } g_aim;
+static struct { uint32_t target; V3 point; float dist, errYaw, errPitch, speed, gap; bool bone; double t; } g_aim;
 // One arrow in flight (from the launch until it stops or 2 s).
 static volatile LONG g_shotReady = 0;
 static struct { V3 p0, v0, camPos, camFwd; uint32_t ent, owner; double t0; float hold, speedScale, vlen; char name[48]; } g_newShot;
@@ -197,6 +208,16 @@ static bool in_combat(uintptr_t actor) {
     __except (EXCEPTION_EXECUTE_HANDLER) { g_hostileOnly = false; logf("exception reading combat state - HostileOnly switched off for this session"); return true; }
 }
 
+// What kind of actor: by its class (C_Horse, C_Dog, C_Animal, C_Human / C_NPCActor); -1 = unknown class.
+static int actor_kind(uintptr_t actor) {
+    uintptr_t vt = 0; __try { vt = *(uintptr_t*)actor; } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+    if (vt == G.vtHorse) return mk::K_HORSE;
+    if (vt == G.vtDog) return mk::K_DOG;
+    if (vt == G.vtAnimal) return mk::K_ANIMAL;
+    if (vt == G.vtHuman || vt == G.vtNpc) return mk::K_PERSON;
+    return -1;
+}
+
 // Aim point on an actor's entity, plus whether it is a person or an animal (by the shape of its box).
 static bool aim_point(uintptr_t ent, V3& out, bool& animal, float* dims = nullptr, bool* bone = nullptr, bool useBone = true) {
     if (!kc::is_a(ent, G.vtEntity)) return false;
@@ -217,38 +238,36 @@ static bool aim_point(uintptr_t ent, V3& out, bool& animal, float* dims = nullpt
     return true;
 }
 
-// Best target near the centre of the view (the current one keeps the lock unless a much better one appears).
-static uint32_t pick(const V3& camPos, const V3& camFwd) {
-    uintptr_t as = actor_system(); if (!as) return 0;
+// Candidates near the centre of the view, then the soft-lock decision (mk::Lock).
+static mk::Lock::Why pick(const V3& camPos, const V3& camFwd, bool handsOn) {
+    uintptr_t as = actor_system(); if (!as) return mk::Lock::NONE;
     void* it = nullptr; G.mkIter((void*)as, &it);
-    if (!it || !kc::is_a((uintptr_t)it, G.vtIter)) return g_lock;
-    uint32_t best = 0; float bestScore = 1e9f, curScore = 1e9f; int seen = 0, calm = 0;
-    for (void* a; (a = G.iterNext(it)) != nullptr && seen < 4096; seen++) {
+    if (!it || !kc::is_a((uintptr_t)it, G.vtIter)) return mk::Lock::KEPT;
+    static mk::Cand c[256]; int n = 0, seen = 0, calm = 0;
+    float wide = std::max(g_policy.cone * g_policy.keep, mk::rad(20.f));
+    for (void* a; (a = G.iterNext(it)) != nullptr && seen < 4096 && n < 256; seen++) {
         uintptr_t actor = (uintptr_t)a; if (actor == g_player) continue;
         uintptr_t ent = F<uintptr_t>(actor, A_ENTITY); if (!ent) continue;
-        V3 p; bool animal;
-        if (!aim_point(ent, p, animal, nullptr, nullptr, false)) continue;   // the box is enough to choose
-        if ((animal && !g_animals) || (!animal && !g_people)) continue;
+        V3 p; bool boxAnimal;
+        if (!aim_point(ent, p, boxAnimal, nullptr, nullptr, false)) continue;   // the box is enough to choose
+        int kind = actor_kind(actor); if (kind < 0) kind = boxAnimal ? mk::K_ANIMAL : mk::K_PERSON;
         V3 r = p - camPos; float d = r.len();
-        if (d < 3.f || d > g_maxDist) continue;
+        if (d < 2.f || d > g_maxDist) continue;
         float ang = mk::angle_between(r, camFwd);
-        uint32_t id = F<uint32_t>(ent, E_ID);
-        if (ang > (id == g_lock ? 1.5f * g_cone : g_cone)) continue;
+        if (ang > wide) continue;
         bool dead = ((DeadByHp_t)((*(uintptr_t**)actor)[38]))(a);
         if (dead) continue;
-        if (!animal && g_hostileOnly && !in_combat(actor)) { calm++; continue; }   // civilians and calm guards are left alone
-        float score = ang + 0.002f * d;
-        if (id == g_lock) curScore = score;
-        if (score < bestScore) { bestScore = score; best = id; }
+        if (kind == mk::K_PERSON && g_hostileOnly && !in_combat(actor)) { calm++; continue; }   // optional: fights only
+        c[n++] = mk::Cand{F<uint32_t>(ent, E_ID), ang, d, kind};
     }
     G.iterRel(it);
+    mk::Lock::Why why = g_lockState.update(c, n, g_policy, handsOn);
     static double s_calmLogT = -100;
-    if (!best && calm && now_s() - s_calmLogT > 5.0) { s_calmLogT = now_s(); logf("%d %s in view not in combat - not targeted (HostileOnly=1)", calm, calm == 1 ? "person" : "people"); }
-    if (g_lock && curScore < 1e8f && best != g_lock && bestScore > 0.5f * curScore) return g_lock;   // hysteresis
-    return best;
+    if (!g_lockState.id && calm && now_s() - s_calmLogT > 5.0) { s_calmLogT = now_s(); logf("%d %s in view not in combat - not targeted (HostileOnly=1)", calm, calm == 1 ? "person" : "people"); }
+    return why;
 }
 
-static void reset_aim() { g_lock = 0; g_lockHasPrev = false; g_haveLast = false; g_errFrames = 0; g_outOfRange = false; }
+static void reset_aim() { g_lock = 0; g_lockState = mk::Lock(); g_lockHasPrev = false; g_haveLast = false; g_errFrames = 0; g_outOfRange = false; }
 
 // ---------------- arrows: calibration ----------------
 static void save_calib() {
@@ -279,9 +298,11 @@ static bool target_point(uint32_t id, V3& p) {
 }
 
 static void finish_track(float t) {
-    float g, k;
-    if (mk::fit_flight(g_track, g, k)) { g_cal.on_flight(g, k); logf("arrow flight: %d samples, gravity %.2f drag %.4f -> using gravity %.2f drag %.4f", g_track.n, g, k, g_cal.flight.g, g_cal.flight.k); }
-    else KC_DLOG("arrow flight: %d samples over %.2f s - too short to measure", g_track.n, t);
+    float g, k, span = 0, rms = 0;
+    if (mk::fit_flight(g_track, g, k, &span, &rms)) {
+        g_cal.on_flight(g, k);
+        logf("arrow flight: %d positions over %.0f m, gravity %.2f drag %.4f (fit within %.1f cm) -> using gravity %.2f drag %.4f", g_track.n, span, g, k, rms * 100.f, g_cal.flight.g, g_cal.flight.k);
+    } else logf("arrow flight: %d positions over %.2f s, %.0f m of clean flight - not enough to measure the drop", g_track.n, t, span);
     if (g_trackTarget && g_trackMiss < 1e8f) logf("arrow passed %.0f cm from the aim point", g_trackMiss * 100.f);
     save_calib();
     g_trackEnt = 0; g_trackTarget = 0;
@@ -304,8 +325,8 @@ static void track_arrows(double now) {
         if (g_aim.target && s.t0 - g_aim.t < 0.3) {
             char nm[64] = "?"; uintptr_t as = actor_system(); void* a = as ? G.getActor((void*)as, g_aim.target) : nullptr;
             uintptr_t ent = a ? F<uintptr_t>((uintptr_t)a, A_ENTITY) : 0; if (ent) ent_name(ent, nm, sizeof nm);
-            logf("   at release: target %s, %s at (%.2f %.2f %.2f), %.1f m, aim error yaw %+.2f pitch %+.2f deg",
-                 nm, g_aim.bone ? "head bone" : "box estimate", g_aim.point.x, g_aim.point.y, g_aim.point.z, g_aim.dist, mk::deg(g_aim.errYaw), mk::deg(g_aim.errPitch));
+            logf("   at release: target %s, %s at (%.2f %.2f %.2f), %.1f m, aim error yaw %+.2f pitch %+.2f deg, predicted impact %.0f cm from it",
+                 nm, g_aim.bone ? "head bone" : "box estimate", g_aim.point.x, g_aim.point.y, g_aim.point.z, g_aim.dist, mk::deg(g_aim.errYaw), mk::deg(g_aim.errPitch), g_aim.gap * 100.f);
             g_trackTarget = g_aim.target;
         } else logf("   at release: the assist was not aiming (off, hands-on or no target)");
         if (changed || !wasMeasured) g_notice = "Game.SendInfoText(\"AutoMarksman: bow measured\", false)";
@@ -358,30 +379,38 @@ static void LaunchHookArrow(void* self, const float* pos, const float* dir, cons
 
 // ---------------- steering ----------------
 static void steer(double now, float dt, uintptr_t look, const V3& camPos, const V3& camFwd) {
-    // The player is moving the mouse: let go for a moment.
+    // The player is moving the mouse: let go (the lock decides whether the target is still wanted).
     float rqx = F<float>(look, L_REQUEST), rqz = F<float>(look, L_REQUEST + 8);
-    if (fabsf(rqx) + fabsf(rqz) > 0.0015f) { if (now >= g_userUntil) KC_DLOG("player is aiming by hand - letting go"); g_userUntil = now + g_overrideS; g_haveLast = false; g_errFrames = 0; }
-    if (now < g_userUntil) return;
+    bool moving = fabsf(rqx) + fabsf(rqz) > 0.0015f;
+    if (moving) { if (now >= g_userUntil) KC_DLOG("player is aiming by hand - letting go"); g_userUntil = now + g_overrideS; g_haveLast = false; g_errFrames = 0; }
+    bool hands = now < g_userUntil;
+    static bool s_hands = false; if (s_hands && !hands) g_acqT = now; s_hands = hands;   // ease back in after the mouse
 
-    if (now - g_pickT > 0.1 || !g_lock) {
+    if (now - g_pickT > (g_lock && !moving ? 0.1 : 0.05)) {
         g_pickT = now;
-        uint32_t id = pick(camPos, camFwd);
+        mk::Lock::Why why = pick(camPos, camFwd, hands);
+        uint32_t id = g_lockState.id;
         if (id != g_lock) {
-            g_lock = id; g_lockHasPrev = false; g_haveLast = false; g_errFrames = 0; g_outOfRange = false;
+            g_lock = id; g_lockHasPrev = false; g_haveLast = false; g_errFrames = 0; g_outOfRange = false; g_acqT = now;
+            if (why == mk::Lock::LOOKED_AWAY) logf("released: you looked away from the target");
+            else if (why == mk::Lock::LOST) logf("target lost (dead, gone or out of view)");
             if (id) {
                 uintptr_t as = actor_system(); void* a = as ? G.getActor((void*)as, id) : nullptr;
                 uintptr_t ent = a ? F<uintptr_t>((uintptr_t)a, A_ENTITY) : 0; V3 p; bool animal = false; float dims[3] = {0};
-                char nm[64]; bool bone = false; if (ent && aim_point(ent, p, animal, dims, &bone))
-                    logf("target: %s (%s) %.1f m away at (%.2f %.2f %.2f), box %.2f x %.2f x %.2f m%s", ent_name(ent, nm, sizeof nm),
-                         animal ? "animal: chest" : bone ? "person: head bone" : "person: head from box", (p - camPos).len(), p.x, p.y, p.z, dims[0], dims[1], dims[2],
-                         animal ? "" : g_hostileOnly ? ", in combat" : in_combat((uintptr_t)a) ? ", in combat" : ", not in combat");
+                char nm[64]; bool bone = false; if (ent && aim_point(ent, p, animal, dims, &bone)) {
+                    int kind = actor_kind((uintptr_t)a);
+                    logf("target%s: %s (%s%s) %.1f m away at (%.2f %.2f %.2f), %.1f deg from the centre, box %.2f x %.2f x %.2f m",
+                         why == mk::Lock::SWITCHED ? " (switched)" : "", ent_name(ent, nm, sizeof nm), kind < 0 ? (animal ? "animal?" : "person?") : mk::kind_name(kind),
+                         animal ? ": chest" : bone ? ": head bone" : ": head from box", (p - camPos).len(), p.x, p.y, p.z, mk::deg(mk::angle_between(p - camPos, camFwd)), dims[0], dims[1], dims[2]);
+                }
             }
         }
     }
+    if (hands) return;
     if (!g_lock) return;
     uintptr_t as = actor_system(); void* a = as ? G.getActor((void*)as, g_lock) : nullptr;
     uintptr_t ent = a ? F<uintptr_t>((uintptr_t)a, A_ENTITY) : 0; V3 tp; bool animal, bone = false;
-    if (!ent || !aim_point(ent, tp, animal, nullptr, &bone)) { reset_aim(); return; }
+    if (!ent || !aim_point(ent, tp, animal, nullptr, &bone)) { g_lock = 0; g_lockState.id = 0; return; }
     if (g_lockHasPrev && dt > 0.f) { V3 v = (tp - g_lockPrev) * (1.f / dt); if (v.len() < 15.f) g_lockVel = g_lockVel + (v - g_lockVel) * std::min(1.f, dt * 6.f); }
     else g_lockVel = V3{};
     g_lockPrev = tp; g_lockHasPrev = true;
@@ -396,8 +425,23 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     float fy = 0, fp = 0;
     if (g_haveLast && dt > 0.f) { fy = mk::wrap_pi(wy - g_lastYaw) / dt; fp = (wp - g_lastPitch) / dt; if (fabsf(fy) > 3.f || fabsf(fp) > 3.f) fy = fp = 0; }
     g_lastYaw = wy; g_lastPitch = wp; g_haveLast = true;
-    float dy, dp; g_steer.step(ey, ep, fy, fp, dt, dy, dp);
-    g_aim.target = g_lock; g_aim.point = tp; g_aim.dist = (tp - origin).len(); g_aim.errYaw = ey; g_aim.errPitch = ep; g_aim.speed = speed; g_aim.bone = bone; g_aim.t = now;
+    // Gentle start: the turn speed builds up over 0.4 s after a target is taken.
+    mk::Steer st = g_steer; st.maxRate *= std::min(1.f, 0.3f + 0.7f * (float)(now - g_acqT) / 0.4f);
+    float dy, dp; st.step(ey, ep, fy, fp, dt, dy, dp);
+
+    // Where would an arrow loosed right now cross the target?  (current camera + measured offsets)
+    V3 lead = g_lead ? g_lockVel * s.tof : V3{}, tFut = tp + lead, at;
+    V3 launch = mk::dir_of(mk::yaw_of(camFwd) + g_cal.yawOff, mk::pitch_of(camFwd) + g_cal.pitchOff);
+    float gap = mk::impact_near(origin, launch, speed, g_cal.flight, tFut, at) ? (at - tFut).len() : -1.f;
+    g_aim.target = g_lock; g_aim.point = tp; g_aim.dist = (tp - origin).len(); g_aim.errYaw = ey; g_aim.errPitch = ep; g_aim.speed = speed; g_aim.bone = bone; g_aim.t = now; g_aim.gap = gap;
+    if (g_marker && gap >= 0 && !InterlockedCompareExchange(&g_markerReady, 0, 0)) {
+        // Impact: a cross (green on the head, within 8 cm; else yellow); head: a small white cross.
+        float r = 0.06f + 0.002f * g_aim.dist, h = 0.04f + 0.001f * g_aim.dist; bool on = gap < 0.08f;
+        sprintf_s(g_markerLua, "local a,b=%.3f,%.3f;local x,y,z=%.3f,%.3f,%.3f;System.DrawLine({x=x-a,y=y,z=z},{x=x+a,y=y,z=z},%d,%d,0,1);System.DrawLine({x=x,y=y,z=z-a},{x=x,y=y,z=z+a},%d,%d,0,1);"
+                  "x,y,z=%.3f,%.3f,%.3f;System.DrawLine({x=x-b,y=y,z=z},{x=x+b,y=y,z=z},1,1,1,1);System.DrawLine({x=x,y=y,z=z-b},{x=x,y=y,z=z+b},1,1,1,1)",
+                  r, h, at.x, at.y, at.z, on ? 0 : 1, 1, on ? 0 : 1, 1, tFut.x, tFut.y, tFut.z);
+        InterlockedExchange(&g_markerReady, 1);
+    }
 
     // Safety: the camera must come closer to the aim point while the mod turns it.  If after half a second
     // of large errors it has not, something in the game is not as expected: stop and say so.
@@ -419,9 +463,9 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
 
     if (kc::g_debug && now - g_logT > 0.5) {
         g_logT = now;
-        logf("aim: target %.1f m (%s), arrow %.1f m/s %s, flight %.2f s, lead (%.1f %.1f) m/s, error yaw %+.2f pitch %+.2f deg, turn %+.2f %+.2f deg",
+        logf("aim: target %.1f m (%s), arrow %.1f m/s %s, flight %.2f s, lead (%.1f %.1f) m/s, error yaw %+.2f pitch %+.2f deg, turn %+.2f %+.2f deg, predicted impact %.0f cm from the aim point",
              (tp - origin).len(), bone ? "head bone" : animal ? "chest" : "box", speed, g_cal.measured() ? "measured" : "GUESS", s.tof, g_lockVel.x, g_lockVel.y,
-             mk::deg(ey), mk::deg(ep), mk::deg(dy), mk::deg(dp));
+             mk::deg(ey), mk::deg(ep), mk::deg(dy), mk::deg(dp), gap * 100.f);
     }
 }
 
@@ -463,6 +507,10 @@ static void* SsUpdateHook(void* self, void* a, void* b, void* c) {
         __try { tick(); }
         __except (EXCEPTION_EXECUTE_HANDLER) { logf("exception in tick - assist disabled for this session"); g_dead = true; }
     }
+    if (InterlockedCompareExchange(&g_markerReady, 0, 0) && G.ssExec) {
+        __try { G.ssExec(self, g_markerLua, strlen(g_markerLua), "AutoMarksman marker", nullptr); } __except (EXCEPTION_EXECUTE_HANDLER) { g_marker = false; }
+        InterlockedExchange(&g_markerReady, 0);
+    }
     const char* line = (const char*)InterlockedExchangePointer((void* volatile*)&g_notice, nullptr);
     if (line && G.ssExec) { __try { G.ssExec(self, line, strlen(line), "AutoMarksman", nullptr); } __except (EXCEPTION_EXECUTE_HANDLER) { G.ssExec = nullptr; } }
     return r;
@@ -495,6 +543,11 @@ static bool resolve(kc::Resolver& R, Found& f) {
     f.deadByHp = R.slot("C_Actor::IsDeadByHealth", vtActor, 38, SIG_DEADBYHP);
     R.slot("C_Actor::GetViewRotation (look state at +0x238)", vtActor, 57, SIG_GETVIEWROT);
     G.vtPlayer = R.vtable("C_Player", ".?AVC_Player@entitymodule@wh@@", 0);
+    G.vtHuman = R.vtable("C_Human", ".?AVC_Human@entitymodule@wh@@", 0);
+    G.vtNpc = R.vtable("C_NPCActor", ".?AVC_NPCActor@entitymodule@wh@@", 0);
+    G.vtHorse = R.vtable("C_Horse", ".?AVC_Horse@entitymodule@wh@@", 0);
+    G.vtDog = R.vtable("C_Dog", ".?AVC_Dog@entitymodule@wh@@", 0);
+    G.vtAnimal = R.vtable("C_Animal", ".?AVC_Animal@entitymodule@wh@@", 0);
     G.vtMwCtrl = R.vtable("C_MissileWeaponPlayerController", ".?AVC_MissileWeaponPlayerController@entitymodule@wh@@", 0);
     G.vtProjectile = R.vtable("CProjectile", ".?AVCProjectile@entitymodule@wh@@", 0);
     f.launch = R.slot("CProjectile::Launch", G.vtProjectile, 35, SIG_LAUNCH);
@@ -535,23 +588,26 @@ static DWORD WINAPI Init(LPVOID) {
     QueryPerformanceFrequency(&g_qpf);
     g_key.vk = kc::ini_key("Toggle", VK_F4);
     g_on = kc::ini_int("Options", "StartEnabled", 0) != 0;
-    g_cone = mk::rad((float)std::max(2, std::min(30, kc::ini_int("Options", "ConeDegrees", 10))));
+    g_policy.cone = mk::rad((float)std::max(2, std::min(30, kc::ini_int("Options", "ConeDegrees", 10))));
     g_maxDist = (float)std::max(10, std::min(200, kc::ini_int("Options", "MaxDistance", 80)));
     g_steer.maxRate = mk::rad((float)std::max(20, std::min(400, kc::ini_int("Options", "TurnSpeed", 115))));
     g_steer.gain = (float)std::max(2, std::min(30, kc::ini_int("Options", "Responsiveness", 9)));
     g_headDrop = std::max(0, std::min(40, kc::ini_int("Options", "HeadDropCm", 13))) / 100.f;
     g_overrideS = std::max(0, std::min(3000, kc::ini_int("Options", "HandsOffMs", 400))) / 1000.f;
     g_cal.speed = (float)std::max(15, std::min(150, kc::ini_int("Options", "ArrowSpeed", 55)));
-    g_people = kc::ini_int("Options", "TargetPeople", 1) != 0;
-    g_hostileOnly = kc::ini_int("Options", "HostileOnly", 1) != 0;
+    g_policy.people = kc::ini_int("Options", "TargetPeople", 1) != 0;
+    g_policy.horses = kc::ini_int("Options", "TargetHorses", 0) != 0;
+    g_policy.dogs = kc::ini_int("Options", "TargetDogs", 0) != 0;
+    g_marker = kc::ini_int("Options", "ShowImpactMarker", 1) != 0;
+    g_hostileOnly = kc::ini_int("Options", "HostileOnly", 0) != 0;
     g_headBone = kc::ini_int("Options", "HeadBone", 1) != 0;
     g_headAbove = std::max(-10, std::min(20, kc::ini_int("Options", "HeadAboveBoneCm", 8))) / 100.f;
     g_remember = kc::ini_int("Options", "RememberBow", 1) != 0;
-    g_animals = kc::ini_int("Options", "TargetAnimals", 1) != 0;
+    g_policy.animals = kc::ini_int("Options", "TargetAnimals", 1) != 0;
     g_lead = kc::ini_int("Options", "LeadMovingTargets", 1) != 0;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.2.0 (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.3.0 (game ts 0x%08X)", R.im.timestamp);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     G.fwGlobal = f.fwGlobal; G.sysGlobal = f.sysGlobal;
@@ -568,8 +624,10 @@ static DWORD WINAPI Init(LPVOID) {
     kc::write_ptr(&((void**)G.vtSS)[1], (void*)&SsUpdateHook);
     char kn[16];
     logf("ready: %s switches the assist %s (now %s); cone %.0f deg, range %.0f m, turn speed %.0f deg/s, first-shot arrow speed %.0f m/s; %s, %s",
-         kc::key_name(g_key.vk, kn, sizeof kn), "on/off", g_on ? "ON" : "OFF", mk::deg(g_cone), g_maxDist, mk::deg(g_steer.maxRate), g_cal.speed,
-         g_hostileOnly ? "people only when in combat" : "all people", g_headBone ? "head bone" : "head from box");
+         kc::key_name(g_key.vk, kn, sizeof kn), "on/off", g_on ? "ON" : "OFF", mk::deg(g_policy.cone), g_maxDist, mk::deg(g_steer.maxRate), g_cal.speed,
+         g_hostileOnly ? "people only when in combat" : "anyone you aim at", g_headBone ? "head bone" : "head from box");
+    logf("targets: people %s, animals %s, horses %s, dogs %s; impact marker %s", g_policy.people ? "yes" : "no", g_policy.animals ? "yes" : "no",
+         g_policy.horses ? "yes" : "no", g_policy.dogs ? "yes" : "no", g_marker ? "on" : "off");
     return 0;
 }
 KC_PLUGIN("Theatrical AutoMarksman", KC_AUTHOR, 10)

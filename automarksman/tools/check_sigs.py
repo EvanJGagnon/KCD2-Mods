@@ -38,7 +38,8 @@ PLAN = {
     'SIG_ABSJOINT':       ('slot', '.?AVCSkeletonPose@@', 27, 0x641250),
     'SIG_COMBATMODE':     ('find', 0x117F1E8),
 }
-RTTI_ONLY = ['.?AVC_Player@entitymodule@wh@@', '.?AVC_MissileWeaponPlayerController@entitymodule@wh@@']
+RTTI_ONLY = ['.?AVC_Player@entitymodule@wh@@', '.?AVC_MissileWeaponPlayerController@entitymodule@wh@@', '.?AVCArrow@entitymodule@wh@@',
+             '.?AVC_Human@entitymodule@wh@@', '.?AVC_NPCActor@entitymodule@wh@@', '.?AVC_Horse@entitymodule@wh@@', '.?AVC_Dog@entitymodule@wh@@', '.?AVC_Animal@entitymodule@wh@@']
 
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT

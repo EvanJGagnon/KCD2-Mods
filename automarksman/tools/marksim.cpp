@@ -7,6 +7,7 @@
 // velocities, flight samples and the camera.  Every test prints PASS/FAIL; the exit code is the number
 // of failures.
 #include "../src/mk_ballistics.h"
+#include "../src/mk_target.h"
 #include <cstdio>
 #include <cstdint>
 #include <vector>
@@ -123,9 +124,10 @@ int main() {
             tr.add(t, p);
             if (t < 0.4f) { for (int s = 0; s < 16; s++) { vv = vv + V3{0, 0, -w.g * dt / 16} - vv * (w.k * dt / 16); p = p + vv * (dt / 16); } }
         }
-        float g, k; bool ok = fit_flight(tr, g, k);
-        printf("     fit %s g=%.2f k=%.4f\n", ok ? "ok" : "rejected", g, k);
-        check(ok && std::fabs(g - 9.81f) < 0.3f && std::fabs(k - 0.03f) < 0.01f, "samples after the impact are ignored");
+        float g = 0, k = 0, span = 0; bool ok = fit_flight(tr, g, k, &span);
+        float zf = 0, zt = 0; height_at_dist(20.f, v.hlen(), v.z, g, k, zf); height_at_dist(20.f, v.hlen(), v.z, 9.81f, 0.03f, zt);
+        printf("     fit %s over %.1f m: g=%.2f k=%.4f, height at 20 m off by %.3f m\n", ok ? "ok" : "rejected", span, g, k, std::fabs(zf - zt));
+        check(ok && span < 25.f && std::fabs(zf - zt) < 0.02f, "samples after the impact are ignored");
     }
     printf("5. learning an unknown bow: head shots at 40 m before and after calibration\n");
     {
@@ -243,6 +245,79 @@ int main() {
         check(ok && b.bow.n == 2 && std::fabs(b.speed_at(1.4f) - 78.f) < 0.01f && std::fabs(b.flight.k - 0.031f) < 1e-4f && std::fabs(b.originOff.z + 0.1f) < 1e-3f,
               "saved calibration loads back unchanged");
         check(!bad && !c.measured(), "corrupt or implausible files are ignored");
+    }
+    printf("15. round 2 flight: 135 fps frames, arrow moved by 30 Hz physics, pivot 6 cm off the launch point\n");
+    {
+        int good = 0;
+        for (int i = 0; i < 40; i++) {
+            TrueArrow w{rnd(8.f, 11.f), rnd(0.f, 0.08f)}; V3 v = dir_of(rnd(-3, 3), rnd(-0.05f, 0.15f)) * rnd(55, 85);
+            ShotTrack tr; tr.p0 = V3{0, 0, 1.6f}; tr.v0 = v;
+            V3 p = tr.p0, vv = v, shown = p + V3{0, 0, 0.06f}; float physT = 0;
+            for (float t = 0; t < 0.71f; t += 1.f / 135) {
+                while (physT + 1.f / 30 <= t) {   // physics steps
+                    for (int k = 0; k < 40; k++) { float h = 1.f / 1200; vv = vv + V3{0, 0, -w.g * h} - vv * (w.k * h); p = p + vv * h; }
+                    physT += 1.f / 30; shown = p + V3{0, 0, 0.06f};
+                }
+                tr.add(t, shown);
+            }
+            float g, k, span;
+            if (fit_flight(tr, g, k, &span)) {
+                // what matters for aiming: the drop at 60 m
+                float zf = 0, zt = 0; height_at_dist(60.f, v.hlen(), v.z, g, k, zf); height_at_dist(60.f, v.hlen(), v.z, w.g, w.k, zt);
+                if (std::fabs(zf - zt) < 0.05f) good++; else printf("       off %.3f m (k %.3f/%.3f g %.2f/%.2f span %.0f)\n", zf - zt, k, w.k, g, w.g, span);
+            }
+        }
+        printf("     %d/40 fits predict the height at 60 m within 5 cm\n", good);
+        check(good >= 38, "the arrow drop is measured from a real-looking track (round 2 said 'too short to measure')");
+    }
+    printf("16. predicted impact lands on the head after the aim settles (near, mid, far; still and walking)\n");
+    {
+        TrueArrow w{9.81f, 0.03f}; Bow bow{76.f, rad(-0.09f), rad(2.47f), V3{0.01f, 0.55f, -0.01f}, 0.f};   // round 2's measured bow
+        Calib cal; Cam cam; aim_and_shoot(w, bow, cal, cam, V3{0, 25, 1.65f}, V3{}, 60, 1.5f, true);
+        cal.flight.g = 9.81f; cal.flight.k = 0.03f;
+        float worstPred = 0, worstReal = 0;
+        for (float d : {8.f, 25.f, 60.f}) for (float sp : {0.f, 1.4f}) {
+            V3 t0{rnd(-4, 4), d, 1.7f}, tv{sp, 0, 0};
+            Cam c = cam; float real = aim_and_shoot(w, bow, cal, c, t0, tv, 60, 1.5f, false);
+            V3 o = cal.origin(c.pos, c.fwd()), at;
+            V3 launchDir = dir_of(yaw_of(c.fwd()) + cal.yawOff, pitch_of(c.fwd()) + cal.pitchOff);
+            Solution s = solve(o, t0 + tv * 1.5f, tv, cal.speed_at(1.5f), cal.flight);
+            impact_near(o, launchDir, cal.speed_at(1.5f), cal.flight, t0 + tv * (1.5f + s.tof), at);
+            worstPred = std::max(worstPred, (at - (t0 + tv * (1.5f + s.tof))).len()); worstReal = std::max(worstReal, real);
+        }
+        printf("     worst predicted impact %.3f m from the head, worst real arrow %.3f m\n", worstPred, worstReal);
+        check(worstPred < 0.05f && worstReal < 0.08f, "the predicted impact point and the real arrow both meet the head");
+    }
+    printf("17. target choice: people before horses and dogs\n");
+    {
+        TargetPolicy p; Lock L;
+        Cand c[] = {{1, rad(3.f), 40.f, K_HORSE}, {2, rad(6.f), 25.f, K_PERSON}, {3, rad(1.f), 8.f, K_DOG}};
+        L.update(c, 3, p, false);
+        check(L.id == 2, "Henry's horse and dog are skipped; the person in view is taken");
+        Cand d[] = {{4, rad(2.f), 30.f, K_ANIMAL}, {5, rad(2.5f), 30.f, K_PERSON}};
+        Lock L2; L2.update(d, 2, p, false);
+        check(L2.id == 5, "a person a little off-centre wins over a deer");
+        Cand e[] = {{4, rad(1.f), 30.f, K_ANIMAL}, {5, rad(6.f), 30.f, K_PERSON}};
+        Lock L3; L3.update(e, 2, p, false);
+        check(L3.id == 4, "a deer right in the middle is still hunted");
+    }
+    printf("18. soft lock: looking away lets go, and the camera never swings back\n");
+    {
+        TargetPolicy p; Lock L;
+        Cand a[] = {{7, rad(4.f), 30.f, K_PERSON}, {8, rad(9.f), 30.f, K_PERSON}};
+        L.update(a, 2, p, false); bool took = L.id == 7;
+        Cand b[] = {{7, rad(12.f), 30.f, K_PERSON}, {8, rad(3.f), 30.f, K_PERSON}};
+        Lock::Why w1 = L.update(b, 2, p, true);           // mouse moving: 7 is now outside the cone
+        bool dropped = w1 == Lock::LOOKED_AWAY && L.id == 0;
+        Lock::Why w2 = L.update(b, 2, p, false);          // mouse still: fresh choice from the new view
+        check(took && dropped, "pulling the view off the target releases it at once");
+        check(w2 == Lock::NEW && L.id == 8, "the next choice is the person now in view, not the old one");
+        Cand far[] = {{7, rad(14.f), 30.f, K_PERSON}};
+        Lock L2; L2.id = 7; L2.update(far, 1, p, true); L2.update(far, 1, p, false);
+        check(L2.id == 0, "with nobody in view after looking away, the assist stays off (no snap back)");
+        Cand near[] = {{7, rad(11.f), 30.f, K_PERSON}};
+        Lock L3; L3.id = 7; L3.update(near, 1, p, false);
+        check(L3.id == 7, "while the mod steers, a small drift outside the cone does not drop the target");
     }
     printf("%s (%d failed)\n", g_fail ? "FAILED" : "ALL PASSED", g_fail);
     return g_fail;

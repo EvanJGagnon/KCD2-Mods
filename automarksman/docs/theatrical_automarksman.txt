@@ -1,9 +1,12 @@
-THEATRICAL AUTOMARKSMAN 0.2.0 (TEST BUILD) - Kingdom Come: Deliverance II
+THEATRICAL AUTOMARKSMAN 0.3.0 (TEST BUILD) - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
-While Henry holds a drawn bow, the camera turns at a steady, human speed onto the head of the person
-in combat (or the chest of the animal) nearest the centre of your view. People who are not fighting,
-such as villagers walking by, are left alone unless you switch HostileOnly off. It allows for the arrow's drop, for air
+While Henry holds a drawn bow, the camera turns gently onto the head of the person (or the chest of the
+animal) nearest the centre of your view, so that the arrow, not the middle of the screen, meets it.
+People come first; your horse and dogs are left alone. The lock is soft: move the mouse and it lets
+go; look away from the target and it is released, and the assist then picks whoever you are now
+looking at. With ShowImpactMarker=1 a cross shows where an arrow loosed now would hit (green when it
+is on the head) and a small white cross marks the head. It allows for the arrow's drop, for air
 drag, for the bow sitting beside Henry's eye and for a target that is walking or running.
 
 That is all it does. You still draw, hold and release the bow yourself. The game flies the arrow, sways
@@ -43,7 +46,9 @@ SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
             MaxDistance=80        metres
             TurnSpeed=115         fastest camera turn, degrees per second
             Responsiveness=9      how quickly the remaining error is closed
-            HostileOnly=1         people only when they are in combat (0 = anyone in view)
+            HostileOnly=0         1 = people only while they are in combat
+            TargetHorses=0, TargetDogs=0   horses and dogs (off: your own are never aimed at)
+            ShowImpactMarker=1    draw the predicted impact and the head
             HeadBone=1            aim at the head bone (0 = estimate the head from the body's size)
             HeadAboveBoneCm=8     how far above the head bone to aim (the bone is at the base of the skull)
             HeadDropCm=13         without the bone: aim this far below the top of a person

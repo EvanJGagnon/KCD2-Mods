@@ -46,31 +46,42 @@ inline float angle_between(const V3& a, const V3& b) {
     return std::acos(std::max(-1.f, std::min(1.f, c)));
 }
 
+// E(t) = (1 - e^-kt)/k and G(t) = (t - E)/k, in double and by series when kt is small (the plain formulas
+// lose all precision for a tiny k in float: a 41 m error showed up in the offline tests).
+inline double drag_E(double t, double k) { double x = k * t; return x < 1e-4 ? t * (1 - x / 2 + x * x / 6) : -std::expm1(-x) / k; }
+inline double drag_G(double t, double k) {
+    double x = k * t;
+    if (x < 1e-2) return t * t * (0.5 - x / 6 + x * x / 24 - x * x * x / 120);
+    return (t - drag_E(t, k)) / k;
+}
+// Time to cover d at horizontal speed vh with drag k (<0: never).
+inline double drag_T(double d, double vh, double k) {
+    double q = k * d / vh;
+    if (q >= 0.9999) return -1;
+    return q < 1e-4 ? d / vh * (1 + q / 2 + q * q / 3) : -std::log1p(-q) / k;
+}
+
 struct Flight {
     float g = 9.81f;    // m/s^2, downwards
     float k = 0.f;      // 1/s, linear drag
-    float E(float t) const { return k > 1e-5f ? (1.f - std::exp(-k * t)) / k : t; }
+    float E(float t) const { return (float)drag_E(t, std::max(0.f, k)); }
     // Position relative to the launch point after t seconds.
     V3 at(const V3& v0, float t) const {
         float e = E(t);
-        float drop = k > 1e-5f ? g * (t - e) / k : 0.5f * g * t * t;
+        float drop = g * (float)drag_G(t, std::max(0.f, k));
         return {v0.x * e, v0.y * e, v0.z * e - drop};
     }
     // Time to cover horizontal distance d at horizontal speed vh (<0: never, drag stops it first).
     float time_for(float d, float vh) const {
         if (vh <= 1e-4f) return -1.f;
-        if (k <= 1e-5f) return d / vh;
-        float q = k * d / vh;
-        if (q >= 0.999f) return -1.f;
-        return -std::log(1.f - q) / k;
+        return (float)drag_T(d, vh, std::max(0.f, k));
     }
     // Height (relative to launch) when the arrow launched at `pitch` and `speed` has covered d metres.
     bool height_at(float d, float speed, float pitch, float& z, float& t) const {
         float vh = speed * std::cos(pitch), vz = speed * std::sin(pitch);
         t = time_for(d, vh);
         if (t < 0) return false;
-        float e = E(t);
-        z = vz * e - (k > 1e-5f ? g * (t - e) / k : 0.5f * g * t * t);
+        z = (float)(vz * drag_E(t, std::max(0.f, k)) - g * drag_G(t, std::max(0.f, k)));
         return true;
     }
 };
@@ -130,45 +141,109 @@ inline Solution solve(const V3& origin, const V3& target, const V3& tvel, float 
 // One arrow Henry shot: where and how fast it left (CProjectile::Launch) plus samples of its flight.
 struct ShotTrack {
     V3 p0, v0;
-    static const int N = 96;
+    static const int N = 128;
     float t[N]; V3 p[N]; int n = 0;
-    void add(float tt, const V3& pp) { if (n < N) { t[n] = tt; p[n] = pp; n++; } }
+    // Only new positions are kept: the arrow entity moves with the physics step, so at a high frame rate
+    // the same position is seen on several frames (round 2: the fit broke on those repeats).
+    void add(float tt, const V3& pp) {
+        if (n > 0 && (pp - p[n - 1]).len() < 1e-3f) return;
+        if (n < N) { t[n] = tt; p[n] = pp; n++; }
+    }
 };
 
-// Fit drag k and gravity g to a tracked flight.  Samples after the arrow stops (hit something) are cut.
-// Returns false if there is not enough clean flight to say anything.
-inline bool fit_flight(const ShotTrack& s, float& g, float& k) {
+// Height of a flight with launch velocity (vh horizontal, vz up) at horizontal distance d, for drag k
+// and gravity g (no clock needed: this is what aiming needs, and it is immune to frame timing).
+inline bool height_at_dist(float d, float vh, float vz, float g, float k, float& z) {
+    if (vh <= 1e-4f) return false;
+    double kk = std::max(0.f, k), t = drag_T(d, vh, kk);
+    if (t < 0) return false;
+    z = (float)(vz * (double)d / vh - g * drag_G(t, kk));    // E(t) = d / vh
+    return true;
+}
+
+// Fit drag k and gravity g to a tracked flight from height against horizontal distance (plus a constant
+// height offset: the arrow entity's pivot need not be the launch point).  Samples after the arrow stops,
+// turns back or drops sharply (it hit something) are cut.  Returns false if the clean flight is too
+// short (under 12 m) to say anything; `span` tells how far the clean part went.
+inline bool fit_flight(const ShotTrack& s, float& g, float& k, float* span = nullptr, float* rms = nullptr) {
     float vh = std::sqrt(s.v0.x * s.v0.x + s.v0.y * s.v0.y), vz = s.v0.z;
+    if (span) *span = 0;
     if (vh < 5.f) return false;
-    int n = 0; float last = 0;                         // usable prefix: steady horizontal progress
+    V3 hd = V3{s.v0.x, s.v0.y, 0}.norm();
+    float d[ShotTrack::N], z[ShotTrack::N]; int n = 0; float last = -1e9f;
     for (int i = 0; i < s.n; i++) {
-        float h = (s.p[i] - s.p0).hlen();
-        if (s.t[i] <= 0) continue;
-        if (i > 0 && h < last + 0.2f * vh * (s.t[i] - s.t[i - 1])) break;   // slowed sharply: it hit something
-        last = h; n = i + 1;
+        V3 r = s.p[i] - s.p0;
+        float di = r.dot(hd), side = (r - hd * di).hlen();
+        if (di < last + 0.05f) { if (n > 0) break; else continue; }   // no forward progress: stopped or bounced
+        if (side > 0.05f * std::max(di, 5.f) + 0.5f) break;            // swerved: deflected
+        if (n > 1) {   // the height must stay on a smooth curve: a sudden change of slope means a hit
+            float s1 = (z[n - 1] - z[n - 2]) / std::max(1e-3f, d[n - 1] - d[n - 2]), s2 = (r.z - z[n - 1]) / std::max(1e-3f, di - d[n - 1]);
+            if (std::fabs(s2 - s1) > 0.35f) break;
+        }
+        d[n] = di; z[n] = r.z; n++; last = di;
     }
-    int use = 0; float tmax = 0; int imax = -1;
-    for (int i = 0; i < n; i++) if (s.t[i] > 0.05f) { use++; if (s.t[i] > tmax) { tmax = s.t[i]; imax = i; } }
-    if (use < 4 || tmax < 0.25f) return false;
-    // k: horizontal distance at the last clean sample = vh * E(tmax; k); E falls as k grows -> bisection.
-    float hT = (s.p[imax] - s.p0).hlen();
-    Flight f; float klo = 0, khi = 3.f;
-    if (hT >= vh * tmax) k = 0;
-    else {
-        for (int b = 0; b < 50; b++) { f.k = 0.5f * (klo + khi); if (vh * f.E(tmax) > hT) klo = f.k; else khi = f.k; }
-        k = 0.5f * (klo + khi);
+    if (span) *span = n ? d[n - 1] : 0;
+    if (n < 5 || d[n - 1] < 12.f) return false;
+    double bestErr = 1e30; float bestK = 0, bestG = 9.81f;
+    auto fit_g = [&](float kk, float& gg, double& err) {
+        // z_i = c + vz*e_i - g*G_i  ->  least squares for (c, g)
+        double sG = 0, sGG = 0, sY = 0, sGY = 0; int m = 0; double Gs[ShotTrack::N], Ys[ShotTrack::N];
+        for (int i = 0; i < n; i++) {
+            float z0, z1; if (!height_at_dist(d[i], vh, vz, 0.f, kk, z0) || !height_at_dist(d[i], vh, vz, 1.f, kk, z1)) { err = 1e30; return; }
+            double G = z0 - z1, Y = z0 - z[i];   // z = z0 - g*G ; Y = g*G - c
+            Gs[m] = G; Ys[m] = Y; m++; sG += G; sGG += G * G; sY += Y; sGY += G * Y;
+        }
+        double det = m * sGG - sG * sG; if (std::fabs(det) < 1e-12) { err = 1e30; return; }
+        double gv = (m * sGY - sG * sY) / det, cv = (sGG * sY - sG * sGY) / det;   // Y = g*G + (-c)
+        err = 0; for (int i = 0; i < m; i++) { double r = Ys[i] - (gv * Gs[i] + cv); err += r * r; }
+        gg = (float)gv;
+    };
+    // Drag shows in two places: how the arrow slows down (distance against time) and the shape of the
+    // height curve.  Frame times are only roughly when the physics moved the arrow (up to a frame late), so
+    // the distance-time part allows a constant time offset and counts with a 0.3 m tolerance; the height
+    // part counts with 2 cm.  The k with the smallest combined misfit wins; gravity comes with it.
+    float ts[ShotTrack::N]; int m = 0;
+    for (int i = 0; i < s.n && m < n; i++) { float di = (s.p[i] - s.p0).dot(hd); if (std::fabs(di - d[m]) < 1e-4f) ts[m++] = s.t[i]; }
+    auto time_err = [&](float kk) {
+        Flight f; f.k = kk; double best = 1e30;
+        for (float tau = -0.02f; tau <= 0.05f; tau += 0.0025f) {
+            double e = 0;
+            for (int i = 0; i < m; i++) { float tt = ts[i] - tau; if (tt < 0) tt = 0; double r = d[i] - vh * f.E(tt); e += r * r; }
+            if (e < best) best = e;
+        }
+        return best;
+    };
+    auto total = [&](float kk, float& gg) {
+        double ez; fit_g(kk, gg, ez); if (ez >= 1e29 || !(gg > 0.5f && gg < 40.f)) return 1e30;
+        return ez / (0.02 * 0.02) + (m == n ? time_err(kk) / (0.3 * 0.3) : 0.0);
+    };
+    for (int i = 0; i <= 120; i++) {
+        float kk = i * 0.005f, gg; double e = total(kk, gg);
+        if (e < bestErr) { bestErr = e; bestK = kk; bestG = gg; }
     }
-    // g: height = vz*E - g*G(t) with G = (t-E)/k  -> least squares over the clean samples.
-    f.k = k; double num = 0, den = 0;
-    for (int i = 0; i < n; i++) {
-        if (s.t[i] <= 0.05f) continue;
-        float e = f.E(s.t[i]); float G = k > 1e-5f ? (s.t[i] - e) / k : 0.5f * s.t[i] * s.t[i];
-        float z = s.p[i].z - s.p0.z;
-        num += (double)G * (vz * e - z); den += (double)G * G;
-    }
-    if (den < 1e-9) return false;
-    g = (float)(num / den);
-    return g > 0.5f && g < 40.f && k >= 0 && k < 2.9f;
+    for (float step = 0.0025f; step > 2e-5f; step *= 0.5f)
+        for (float kk : {bestK - step, bestK + step}) {
+            if (kk < 0) continue;
+            float gg; double e = total(kk, gg);
+            if (e < bestErr) { bestErr = e; bestK = kk; bestG = gg; }
+        }
+    if (bestErr >= 1e29) return false;
+    if (rms) { float gg; double ez; fit_g(bestK, gg, ez); *rms = (float)std::sqrt(ez / n); }
+    g = bestG; k = bestK;
+    return true;
+}
+
+// Where an arrow launched from `origin` along `dir` at `speed` passes the target's distance: the point on
+// its flight at the target's horizontal distance (no wind, no collisions).  Returns false if it never
+// gets there.
+inline bool impact_near(const V3& origin, const V3& dir, float speed, const Flight& f, const V3& target, V3& at) {
+    V3 v = dir.norm() * speed; float vh = v.hlen();
+    V3 r = target - origin; float d = r.hlen();
+    if (vh < 1e-3f) return false;
+    float z; if (!height_at_dist(d, vh, v.z, f.g, f.k, z)) return false;
+    V3 hd = V3{v.x, v.y, 0}.norm();
+    at = origin + hd * d + V3{0, 0, z};
+    return true;
 }
 
 // Launch speed of the bow Henry is using, as measured from his real arrows: a few (draw time, speed)
