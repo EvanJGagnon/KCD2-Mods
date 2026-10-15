@@ -6,9 +6,8 @@ R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 LICENSE = os.path.join(R, '..', '..', 'LICENSE')     # the repository's GPL v3
 AUTHOR = 'Flubbermunchkin'
 MOD = dict(folder='theatrical_autofollow', title='Theatrical AutoFollow', zip='TheatricalAutoFollow', dll='kcd2_autofollow.dll',
-           ver='0.2.0', readme='theatrical_autofollow',
+           ver='0.2.1', readme='theatrical_autofollow',
            desc="Henry can follow anyone with the game's own follow action, as if they were a guide. ] toggles.",
-           text=[('taf_on', 'AutoFollow: you can follow anyone'), ('taf_off', 'AutoFollow: off (vanilla following)')],
            ini='[Keys]\n'
                '; key: F1-F12, a letter or digit, or a symbol key such as ]\nToggle=]\n\n'
                '[Options]\n'
@@ -55,7 +54,7 @@ def stage(m, root):
     write(os.path.join(p, m['dll'].replace('.dll', '.ini')), m['ini'])
     shutil.copy(os.path.join(R, 'docs', m['readme'] + '.txt'), os.path.join(d, 'README.txt'))
     shutil.copy(LICENSE, os.path.join(d, 'LICENSE.txt'))
-    localization(m, d)
+    if m.get('text'): localization(m, d)
 
 def zipdir(root, name, zpath):
     with zipfile.ZipFile(zpath, 'w', zipfile.ZIP_DEFLATED) as z:

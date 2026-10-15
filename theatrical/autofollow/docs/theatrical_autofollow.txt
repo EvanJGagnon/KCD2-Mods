@@ -1,4 +1,4 @@
-THEATRICAL AUTOFOLLOW 0.2.0 (test build) - Kingdom Come: Deliverance II
+THEATRICAL AUTOFOLLOW 0.2.1 (test build) - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 Henry can follow anyone. Normally the game only offers "Follow" for certain NPCs - the ones it marks
@@ -55,6 +55,7 @@ LICENSE
   GNU GPL v3 (LICENSE.txt).
 
 CHANGES
+  0.2.1  - The on/off message shows plain text (it showed "@taf_on" / "@taf_off" before).
   0.2.0  - Following now really works: the game's "followable" check itself treats everyone as
            followable (the developer switch alone turned out to do nothing in the release game).
            The toggle key is now ] (F10 was taken by another mod).

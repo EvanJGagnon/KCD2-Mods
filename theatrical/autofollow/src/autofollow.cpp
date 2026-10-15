@@ -69,8 +69,9 @@ typedef void* (*SsUpdate_t)(void*,void*,void*,void*);
 typedef bool  (*SsExec_t)(void*,const char*,size_t,const char*,void*);
 static SsUpdate_t g_ssUpdate=nullptr; static SsExec_t g_ssExec=nullptr;
 static const char* volatile g_notice=nullptr;
-static const char* const NOTE_ON  = "Game.SendInfoText(\"@taf_on\", true)";
-static const char* const NOTE_OFF = "Game.SendInfoText(\"@taf_off\", true)";
+// Plain text, not a localization key: round 2 showed the "@taf_on" keys unresolved on screen.
+static const char* const NOTE_ON  = "Game.SendInfoText(\"AutoFollow: you can follow anyone\", false)";
+static const char* const NOTE_OFF = "Game.SendInfoText(\"AutoFollow: off (vanilla following)\", false)";
 static void* SsUpdateHook(void* self,void* a,void* b,void* c){
     void* r=g_ssUpdate(self,a,b,c);
     if(g_notice && g_ssExec){
@@ -226,7 +227,7 @@ static DWORD WINAPI Init(LPVOID){
     bool useCvar=kc::ini_int("Options","SetCvar",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("{\"ev\":\"abort\",\"msg\":\"WHGame.dll not loaded\"}"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("{\"ev\":\"start\",\"version\":\"0.2.0\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
+    logf("{\"ev\":\"start\",\"version\":\"0.2.1\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
     FoundF ff{};
     if(!resolve_followable(R,ff)){ logf("{\"ev\":\"disabled\",\"msg\":\"this game version is not supported yet - nothing was changed\"}"); return 0; }
     g_patch=(volatile uint16_t*)ff.patch;
@@ -248,5 +249,5 @@ static DWORD WINAPI Init(LPVOID){
     run_loop();
     return 0;
 }
-KC_PLUGIN("Theatrical AutoFollow", KC_AUTHOR, 20)
+KC_PLUGIN("Theatrical AutoFollow", KC_AUTHOR, 21)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){ if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); } return TRUE; }

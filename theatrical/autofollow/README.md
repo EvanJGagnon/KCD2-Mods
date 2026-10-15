@@ -10,7 +10,7 @@ packaging. It changes no file outside `theatrical/autofollow/`.
 ```bat
 set KC_AUTHOR=Flubbermunchkin
 build.bat
-python tools\package.py            :: dist\TheatricalAutoFollow-0.2.0.zip
+python tools\package.py            :: dist\TheatricalAutoFollow-0.2.1.zip
 out\dev\selftest.exe "<game>\Bin\Win64MasterMasterSteamPGO\WHGame.dll" out\dev\kcd2_autofollow.dll 129dad1 129db22 129db45 1064609 4aade0 15a7864 15a8337 55dbec0 55dc2a0 15a8361 55dc2a4
 out\dev\fulltest.exe "<game>\Bin\Win64MasterMasterSteamPGO\WHGame.dll" out\dev\kcd2_autofollow.dll
 python tools\check_sigs.py "<game>\Bin\Win64MasterMasterSteamPGO\WHGame.dll"
