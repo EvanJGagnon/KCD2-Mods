@@ -27,10 +27,13 @@
 // lock is soft: moving the mouse pauses the assist, looking away from the target releases it, and the
 // next choice starts from wherever the player now looks.
 //
-// What is steered: not the centre of the screen but the predicted impact.  Every frame the mod works out
-// where an arrow loosed now would cross the target's distance (from the measured launch speed, offsets,
-// gravity and drag) and turns the camera until that point is on the head.  ShowImpactMarker=1 draws that
-// point (and the head) in the world with the game's own System.DrawLine.
+// What is steered: not the centre of the screen but the predicted impact.  The game launches the player's
+// arrow from the bow's "arrow" attachment joint along that joint's -Z axis (no camera ray is involved), at the
+// speed of its RPG formula for this bow, arrow and draw.  Every frame the mod reads that pose and speed with
+// the same calls the game's own trajectory preview makes (GetLaunchPose 0x289B28C, speed 0x289B594), works
+// out where an arrow loosed now would cross the target, and turns the camera until that point is on the head
+// (round 4; before, it used the camera plus an average offset, which round 3 showed to be off by up to 0.6
+// degrees from shot to shot).  ShowImpactMarker=1 draws that point (and the head) with System.DrawLine.
 //
 // Use: F4 (kcd2_automarksman.ini) switches the assist on or off; it only acts while a bow is drawn.
 // Game code is found by RTTI + signature at startup (kcd2_common.h); on a mismatch nothing is hooked.
@@ -42,6 +45,9 @@
 #include "kcd2_common.h"
 #include "mk_ballistics.h"
 #include "mk_target.h"
+#include "mk_pose.h"
+#include <cctype>
+#include <cstring>
 
 using kc::logf;
 using mk::V3;
@@ -85,6 +91,13 @@ static const char* SIG_AIMSTART = "40 53 48 83 EC 20 48 8B DA C6 41 20 01 E8";
 // Soul script bind IsInCombatMode 0x117F1E8: actor = soul's actor, in combat = (actor+0x278)->vtbl[1]().
 static const char* SIG_COMBATMODE = "48 89 5C 24 08 57 48 83 EC 20 48 8B CA 48 8B FA E8 ?? ?? ?? ?? 33 DB 48 85 C0 0F 84 ?? ?? ?? ?? 33 D2 48 8B C8 E8 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B 88 78 02 00 00 48 85 C9 74 ?? 48 8B 01 FF 50 08 84 C0";
 // CProjectile::Launch stores m_initialPosition/Direction/Velocity at +0xB0/+0xBC/+0xC8 (0x2AA8906).
+// The bow's launch pose and arrow speed, from the game's own trajectory preview (C_ActorActionShootingAiming,
+// 0x28962C8, the same calls Fire 0x28999C8 makes): loadout = ([actor+0x280])->0x7F3310, bow +0x40, ammo +0x48;
+// GetLaunchPose 0x289B28C(sys, out{pos,up,dir}, actor, bow); speed 0x289B594(sys, power, bow, ammo, soul [actor+0x668]).
+static const char* SIG_PREVIEW = "48 8B 88 80 02 00 00 E8 ?? ?? ?? ?? 48 8B 4E 60 4C 8B F0 48 8B 11 FF 52 10 48 8B B8 68 06 00 00 E8 ?? ?? ?? ?? 48 8B 4E 60 49 8B 5E 40 48 8B 11 FF 52 10 4C 8B CB 48 8D 55 A8 4C 8B C0 E8 ?? ?? ?? ?? E8 ?? ?? ?? ?? F3 0F 10 3D ?? ?? ?? ?? 4D 8B 4E 48 0F 28 CF 4D 8B 46 40 48 89 7C 24 20 E8";
+static const char* SIG_LOADOUT    = "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 01 B2 04 48 8B F1 FF 50 70";
+static const char* SIG_LAUNCHPOSE = "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 55 41 54 41 55 41 56 41 57 48 8D A8 18 FF FF FF 48 81 EC C0 01 00 00";
+static const char* SIG_BOWSPEED   = "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 41 56 48 83 EC 40 0F 29 70 E8 49 8B F9 0F 28 F1 49 8B D8 E8";
 static const char* SIG_LAUNCHSTORE = "F2 0F 10 06 F2 0F 11 83 B0 00 00 00 8B 46 08 89 83 B8 00 00 00 F2 0F 10 07 F2 0F 11 83 BC 00 00 00 8B 47 08 89 83 C4 00 00 00 F2 41 0F 10 06 F2 0F 11 83 C8 00 00 00 41 8B 46 08 89 83 D0 00 00 00";
 
 // ---------------- layouts (build 15693; see docs/NOTES.md) ----------------
@@ -93,7 +106,9 @@ static const uintptr_t MW_OWNER = 0x18, MW_AIMING = 0x20;                       
 static const uintptr_t L_OWNER = 0x00, L_ANGLES = 0x08, L_REQUEST = 0x7C, L_ACCUM = 0x88;   // C_ActorPhysicsState (Ang3: x pitch, z yaw)
 static const uintptr_t E_ID = 0x0C, E_NAME = 0xE0, E_TM = 0x58;                    // CEntity (world TM rows at +0x58, translation +0x64/+0x74/+0x84)
 static const uintptr_t PR_ENTITY = 0x38, PR_OWNER = 0x108;                         // CProjectile
-static const uintptr_t GENV_SYSTEM_TO_ENTSYS = 0x20;                               // gEnv.pEntitySystem (+0xA0) = &gEnv.pSystem (+0xC0) - 0x20
+static const uintptr_t GENV_SYSTEM_TO_ENTSYS = 0x20;
+static const uintptr_t A_LOADOUT = 0x280, A_SOUL = 0x668, LO_BOW = 0x40, LO_AMMO = 0x48;          // C_Actor -> loadout (SIG_PREVIEW)
+static const uintptr_t PR_AMMOPARAMS = 0x68, AP_PARTICLE = 0x88, PP_AIRRES = 0x24, PP_GRAVITY = 0x44;   // CProjectile -> ammo params -> pe_params_particle                               // gEnv.pEntitySystem (+0xA0) = &gEnv.pSystem (+0xC0) - 0x20
 
 typedef void* (*SsUpdate_t)(void*, void*, void*, void*);
 typedef bool  (*SsExec_t)(void*, const char*, size_t, const char*, void*);
@@ -113,6 +128,10 @@ typedef void* (*CiGet_t)(void*);
 typedef int16_t (*JointId_t)(void*, const char*);
 typedef const float* (*AbsJoint_t)(void*, int);
 typedef bool (*InCombat_t)(void*);
+typedef void* (*Loadout_t)(void*);
+typedef void* (*WSys_t)();
+typedef void  (*LaunchPose_t)(void*, float*, void*, void*);
+typedef float (*BowSpeedFn_t)(void*, float, void*, void*, void*);
 
 static struct Game {
     uintptr_t fwGlobal, sysGlobal, vtPlayer, vtMwCtrl, vtEntity, vtEntSys, vtActorSys, vtIter, vtProjectile, vtArrow, vtSS;
@@ -122,6 +141,7 @@ static struct Game {
     GetClientActor_t clientActor; GetViewCamera_t viewCamera; GetEntity_t getEntity; GetBounds_t bounds;
     GetActor_t getActor; MkIter_t mkIter; IterNext_t iterNext; IterRel_t iterRel; uintptr_t deadByHp;
     Launch_t launch; SsUpdate_t ssUpdate; SsExec_t ssExec;
+    Loadout_t loadout; WSys_t wsys; LaunchPose_t launchPose; BowSpeedFn_t bowSpeed;
 } G;
 
 // ---------------- settings ----------------
@@ -131,6 +151,11 @@ static mk::TargetPolicy g_policy; static mk::Lock g_lockState;
 static float g_maxDist = 80.f, g_headDrop = 0.13f, g_headAbove = 0.08f, g_overrideS = 0.4f;
 static mk::Steer g_steer;
 static mk::Calib g_cal;
+// Live bow pose (round 4): the arrow leaves the bow's "arrow" joint along its -Z axis, at the game's own speed.
+static bool g_live = true; static int g_poseFaults = 0;
+static V3 g_slot; static bool g_haveSlot = false;               // arrow helper offset in the joint frame (learnt from the first arrow)
+static mk::SpeedCheck g_speedChk; static mk::PoseOffset g_off;
+static mk::Flight g_phys; static bool g_physGame = false;        // gravity and air resistance from the arrow's own physics params
 
 // ---------------- per-frame state (game thread) ----------------
 static LARGE_INTEGER g_qpf;
@@ -147,10 +172,13 @@ static float g_errStart = 0; static int g_errFrames = 0;        // "does the cam
 static const char* volatile g_notice = nullptr;
 
 // What the aim looked like on the last frame the mod steered (for the per-shot log).
-static struct { uint32_t target; V3 point; float dist, errYaw, errPitch, speed, gap; bool bone; double t; } g_aim;
+static struct { uint32_t target; V3 point, at, origin, dir; float dist, errYaw, errPitch, speed, gap; bool bone, live; double t; } g_aim;
 // One arrow in flight (from the launch until it stops or 2 s).
 static volatile LONG g_shotReady = 0;
-static struct { V3 p0, v0, camPos, camFwd; uint32_t ent, owner; double t0; float hold, speedScale, vlen; char name[48]; } g_newShot;
+static struct { V3 p0, v0, camPos, camFwd; uint32_t ent, owner; double t0; float hold, speedScale, vlen, gameSpeed; char name[48];
+                mk::LivePose fire; float physK; V3 physG; bool physOk; } g_newShot;
+static struct { bool valid; V3 at; } g_shotPred;                   // predicted impact at release, for the flight check
+static V3 g_tgtP[mk::ShotTrack::N]; static float g_tgtT[mk::ShotTrack::N]; static int g_tgtN = 0;   // the target during the flight
 static mk::ShotTrack g_track; static uint32_t g_trackEnt = 0, g_trackTarget = 0; static double g_trackT0 = 0;
 static float g_trackMiss = 1e9f; static V3 g_trackPrev; static bool g_trackHasPrev = false;
 
@@ -172,6 +200,43 @@ static const char* ent_name(uintptr_t e, char* buf, size_t cap) {
 
 static bool in_image(uintptr_t a) { return a >= G.imgLo && a < G.imgHi; }
 static bool in_text(uintptr_t a) { return a >= G.textLo && a < G.textHi; }
+
+// ---------------- the bow's live launch pose ----------------
+// The same two calls the game's trajectory preview makes every frame while the bow is drawn: where the bow's
+// "arrow" joint is and where it points, and the arrow speed the game's formula gives for this bow, this arrow
+// and a full draw (power 1).  Read-only: nothing is changed.  Faults switch it off (the measured camera
+// offsets of the calibration are used instead).
+static bool read_pose_raw(mk::LivePose& lp, float* speed) {
+    lp.ok = false; if (speed) *speed = 0;
+    uintptr_t holder = F<uintptr_t>(g_player, A_LOADOUT); if (!holder || !kc::readable(holder, 8) || !in_image(*(uintptr_t*)holder)) return false;
+    uintptr_t lo = (uintptr_t)G.loadout((void*)holder); if (!lo || !kc::readable(lo + LO_BOW, 16)) return false;
+    void* bow = F<void*>(lo, LO_BOW); void* ammo = F<void*>(lo, LO_AMMO); if (!bow) return false;
+    void* sys = G.wsys();
+    float out[9] = {0};
+    G.launchPose(sys, out, (void*)g_player, bow);
+    lp.pos = V3{out[0], out[1], out[2]}; lp.up = V3{out[3], out[4], out[5]}; lp.dir = V3{out[6], out[7], out[8]};
+    float dl = lp.dir.len(), ul = lp.up.len();
+    if (!std::isfinite(dl + ul + lp.pos.x + lp.pos.y + lp.pos.z) || dl < 0.9f || dl > 1.1f || ul < 0.5f || ul > 1.5f) return false;
+    lp.dir = lp.dir * (1.f / dl); lp.up = lp.up * (1.f / ul);
+    lp.ok = true;
+    if (speed && ammo) {
+        void* soul = F<void*>(g_player, A_SOUL);
+        if (soul) { float v = G.bowSpeed(sys, 1.f, bow, ammo, soul); if (std::isfinite(v) && v > 5.f && v < 300.f) *speed = v; }
+    }
+    return true;
+}
+static bool read_pose(mk::LivePose& lp, float* speed) {
+    if (!g_live) return false;
+    __try { return read_pose_raw(lp, speed); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        lp.ok = false;
+        if (++g_poseFaults >= 10) { g_live = false; logf("bow pose: 10 faults while reading it - aiming with the measured camera offsets from now on"); }
+        return false;
+    }
+}
+// Gravity and drag to aim with: the arrow's own physics parameters once an arrow has shown them, else the
+// measured flights.
+static const mk::Flight& flight_use() { return g_physGame ? g_phys : g_cal.flight; }
 
 // ---------------- skeleton bones ----------------
 // A joint of an entity's character, as the script bind Entity.GetBonePos does it: CEntity::GetCharacter(slot)
@@ -344,7 +409,7 @@ static mk::Lock::Why pick(const V3& camPos, const V3& camFwd, bool handsOn) {
     return why;
 }
 
-static void reset_aim() { g_lock = 0; g_lockState = mk::Lock(); g_lockHasPrev = false; g_haveLast = false; g_errFrames = 0; g_outOfRange = false; }
+static void reset_aim() { g_off.have = false; g_lock = 0; g_lockState = mk::Lock(); g_lockHasPrev = false; g_haveLast = false; g_errFrames = 0; g_outOfRange = false; }
 
 // ---------------- arrows: calibration ----------------
 static void save_calib() {
@@ -374,41 +439,87 @@ static bool target_point(uint32_t id, V3& p) {
     return ent && aim_point(ent, p, animal);
 }
 
+// After the flight: where the real arrow crossed the target's distance, against the head and against where the
+// mod predicted at release (signed, in cm: up/right as seen from the bow).  This is the check that does not
+// depend on the mod's own model.
 static void finish_track(float t) {
+    if (g_trackTarget && g_tgtN > 0) {
+        V3 h = mk::heading(g_track.v0), at; float tc = 0;
+        // the target where it was when the arrow got there (it may walk)
+        auto tgt_at = [&](float tt) { int i = 0; while (i + 1 < g_tgtN && g_tgtT[i + 1] <= tt) i++; return g_tgtP[i]; };
+        V3 tp = g_tgtP[0]; float d = 0;
+        for (int it = 0; it < 3; it++) { V3 r = tp - g_track.p0; d = r.x * h.x + r.y * h.y; if (!mk::crossing(g_track, g_track.p0, h, d, at, tc)) break; tp = tgt_at(tc); }
+        if (mk::crossing(g_track, g_track.p0, h, d, at, tc)) {
+            float up, right; mk::miss_parts(h, at, tp, up, right);
+            logf("   at the target (%.1f m, %.2f s): the arrow passed %+.0f cm %s, %+.0f cm %s of the %s",
+                 d, tc, fabsf(up) * 100.f, up >= 0 ? "high" : "low", fabsf(right) * 100.f, right >= 0 ? "right" : "left", g_aim.bone ? "head bone" : "box estimate");
+            if (g_shotPred.valid) {
+                V3 r = g_shotPred.at - g_track.p0; float dp = r.x * h.x + r.y * h.y; V3 ap; float tp2;
+                if (mk::crossing(g_track, g_track.p0, h, dp, ap, tp2)) {
+                    float pu, pr; mk::miss_parts(h, ap, g_shotPred.at, pu, pr);
+                    logf("   prediction check: at %.1f m the real arrow was %+.0f cm up, %+.0f cm right of the impact the mod predicted at release", dp, pu * 100.f, pr * 100.f);
+                }
+            }
+        } else logf("   at the target: the arrow never reached its distance (%.1f m) - it hit something first or fell short", d);
+    }
     float g, k, span = 0, rms = 0;
     if (mk::fit_flight(g_track, g, k, &span, &rms)) {
-        g_cal.on_flight(g, k);
-        logf("arrow flight: %d positions over %.0f m, gravity %.2f drag %.4f (fit within %.1f cm) -> using gravity %.2f drag %.4f", g_track.n, span, g, k, rms * 100.f, g_cal.flight.g, g_cal.flight.k);
+        if (!g_physGame) g_cal.on_flight(g, k);
+        logf("arrow flight: %d positions over %.0f m, measured gravity %.2f drag %.4f (fit within %.1f cm); aiming with gravity %.2f drag %.4f (%s)", g_track.n, span, g, k, rms * 100.f,
+             flight_use().g, flight_use().k, g_physGame ? "the arrow's physics parameters" : "measured flights");
     } else logf("arrow flight: %d positions over %.2f s, %.0f m of clean flight - not enough to measure the drop", g_track.n, t, span);
-    if (g_trackTarget && g_trackMiss < 1e8f) logf("arrow passed %.0f cm from the aim point", g_trackMiss * 100.f);
+    if (g_trackTarget && g_trackMiss < 1e8f) logf("   closest approach to the aim point: %.0f cm", g_trackMiss * 100.f);
     save_calib();
-    g_trackEnt = 0; g_trackTarget = 0;
+    g_trackEnt = 0; g_trackTarget = 0; g_tgtN = 0;
 }
 
 static void track_arrows(double now) {
     if (InterlockedExchange(&g_shotReady, 0)) {
         auto& s = g_newShot;
         if (g_trackEnt) finish_track((float)(now - g_trackT0));
-        float predicted = g_cal.speed_at(s.hold); bool wasMeasured = g_cal.measured();
+        float predicted = g_aim.live && now - g_aim.t < 1.0 ? g_aim.speed : g_cal.speed_at(s.hold); bool wasMeasured = g_cal.measured();
         bool changed = g_cal.on_launch(s.p0, s.v0, s.camPos, s.camFwd, s.hold);
         float sp = s.v0.len();
-        logf("arrow %d (%s): speed %.1f m/s (|v| %.1f x scale %.2f) after %.2f s draw; aimed with %.1f m/s (%s, %+.1f%%)%s",
-             g_cal.shots, s.name, sp, s.vlen, s.speedScale, s.hold, predicted, wasMeasured ? "measured" : "first-shot guess", 100.f * (predicted - sp) / sp,
-             changed ? " - bow, arrow or strength changed: re-measured" : "");
-        logf("   launch vs camera: yaw %+.2f pitch %+.2f deg, from (%.2f %.2f %.2f) m in camera axes (right, forward, up)",
-             mk::deg(mk::wrap_pi(mk::yaw_of(s.v0) - mk::yaw_of(s.camFwd))), mk::deg(mk::pitch_of(s.v0) - mk::pitch_of(s.camFwd)),
-             g_cal.originOff.x, g_cal.originOff.y, g_cal.originOff.z);
-        g_trackTarget = 0;
-        if (g_aim.target && s.t0 - g_aim.t < 0.3) {
+        logf("arrow %d (%s): speed %.1f m/s after %.2f s draw; the game's formula says %.1f m/s for a full draw%s",
+             g_cal.shots, s.name, sp, s.hold, s.gameSpeed, s.gameSpeed > 0 && fabsf(sp / s.gameSpeed - 1.f) > 0.03f ? " - DIFFERENT (early release, or an effect the formula call misses)" : "");
+        if (s.gameSpeed > 0) { bool used = g_speedChk.add(sp, s.gameSpeed); if (!used) logf("   speed differs by %+.0f%% - not learnt from", 100.f * (sp / s.gameSpeed - 1.f)); }
+        logf("   launch vs camera: yaw %+.2f pitch %+.2f deg (the bow's own aim; the camera is not the arrow's path)",
+             mk::deg(mk::wrap_pi(mk::yaw_of(s.v0) - mk::yaw_of(s.camFwd))), mk::deg(mk::pitch_of(s.v0) - mk::pitch_of(s.camFwd)));
+        if (s.fire.ok) {
+            // The arrow helper's offset: joint minus launch point, in the joint frame (constant per arrow model).
+            V3 sl = mk::slot_learn(s.fire.dir, s.fire.up, s.fire.pos - s.p0);
+            if (sl.len() < 1.5f) { g_slot = g_haveSlot ? g_slot + (sl - g_slot) * 0.5f : sl; g_haveSlot = true; }
+            float da = mk::angle_between(s.v0, s.fire.dir);
+            logf("   bow pose at the shot: arrow leaves %.1f cm from the bow's arrow joint, %.2f deg off its axis (arrow helper offset %.1f %.1f %.1f cm)",
+                 (s.fire.pos - s.p0).len() * 100.f, mk::deg(da), sl.x * 100.f, sl.y * 100.f, sl.z * 100.f);
+        } else logf("   bow pose at the shot: not readable%s", g_live ? "" : " (switched off)");
+        if (g_aim.live && now - g_aim.t < 1.0) {
+            V3 h = mk::heading(s.v0), d = s.p0 - g_aim.origin;
+            logf("   vs the mod's last aimed frame (%.0f ms earlier): direction yaw %+.2f pitch %+.2f deg, start point %.0f cm, speed %+.1f%%",
+                 (s.t0 - g_aim.t) * 1000.0, mk::deg(mk::wrap_pi(mk::yaw_of(s.v0) - mk::yaw_of(g_aim.dir))), mk::deg(mk::pitch_of(s.v0) - mk::pitch_of(g_aim.dir)),
+                 d.len() * 100.f, 100.f * (sp / std::max(1.f, predicted) - 1.f));
+            (void)h;
+        }
+        if (s.physOk) {
+            float gz = -s.physG.z;
+            if (gz > 1.f && gz < 30.f && s.physK >= 0.f && s.physK < 2.f) {
+                if (!g_physGame || fabsf(g_phys.g - gz) > 0.01f || fabsf(g_phys.k - s.physK) > 1e-4f)
+                    logf("   arrow physics (ammo parameters): gravity %.2f, air resistance %.4f - used from now on", gz, s.physK);
+                g_phys.g = gz; g_phys.k = s.physK; g_physGame = true;
+            } else if (!g_physGame) logf("   arrow physics (ammo parameters): gravity (%.2f %.2f %.2f), air resistance %.4f - not usable, the measured flights are used", s.physG.x, s.physG.y, s.physG.z, s.physK);
+        }
+        g_trackTarget = 0; g_shotPred.valid = false;
+        if (g_aim.target && s.t0 - g_aim.t < 0.5) {
             char nm[64] = "?"; uintptr_t as = actor_system(); void* a = as ? G.getActor((void*)as, g_aim.target) : nullptr;
             uintptr_t ent = a ? F<uintptr_t>((uintptr_t)a, A_ENTITY) : 0; if (ent) ent_name(ent, nm, sizeof nm);
-            logf("   at release: target %s, %s at (%.2f %.2f %.2f), %.1f m, aim error yaw %+.2f pitch %+.2f deg, predicted impact %.0f cm from it",
-                 nm, g_aim.bone ? "head bone" : "box estimate", g_aim.point.x, g_aim.point.y, g_aim.point.z, g_aim.dist, mk::deg(g_aim.errYaw), mk::deg(g_aim.errPitch), g_aim.gap * 100.f);
-            g_trackTarget = g_aim.target;
+            logf("   at release: target %s, %s at (%.2f %.2f %.2f), %.1f m, aim error yaw %+.2f pitch %+.2f deg, predicted impact %.0f cm from it (%s)",
+                 nm, g_aim.bone ? "head bone" : "box estimate", g_aim.point.x, g_aim.point.y, g_aim.point.z, g_aim.dist, mk::deg(g_aim.errYaw), mk::deg(g_aim.errPitch), g_aim.gap * 100.f,
+                 g_aim.live ? "from the bow's live pose" : "from the camera and measured offsets");
+            g_trackTarget = g_aim.target; g_shotPred.valid = g_aim.gap >= 0; g_shotPred.at = g_aim.at;
         } else logf("   at release: the assist was not aiming (off, hands-on or no target)");
         if (changed || !wasMeasured) g_notice = "Game.SendInfoText(\"AutoMarksman: bow measured\", false)";
         g_track = mk::ShotTrack(); g_track.p0 = s.p0; g_track.v0 = s.v0; g_trackEnt = s.ent; g_trackT0 = s.t0;
-        g_trackMiss = 1e9f; g_trackPrev = s.p0; g_trackHasPrev = true;
+        g_trackMiss = 1e9f; g_trackPrev = s.p0; g_trackHasPrev = true; g_tgtN = 0;
         save_calib();
     }
     if (!g_trackEnt) return;
@@ -418,7 +529,10 @@ static void track_arrows(double now) {
     if (!done) {
         V3 p{F<float>(e, E_TM + 0x0C), F<float>(e, E_TM + 0x1C), F<float>(e, E_TM + 0x2C)};
         g_track.add(t, p);
-        V3 tp; if (g_trackTarget && target_point(g_trackTarget, tp)) g_trackMiss = std::min(g_trackMiss, seg_dist(g_trackPrev, p, tp));
+        V3 tp; if (g_trackTarget && target_point(g_trackTarget, tp)) {
+            g_trackMiss = std::min(g_trackMiss, seg_dist(g_trackPrev, p, tp));
+            if (g_tgtN < mk::ShotTrack::N) { g_tgtT[g_tgtN] = t; g_tgtP[g_tgtN] = tp; g_tgtN++; }
+        }
         g_trackPrev = p;
     }
     if (done) finish_track(t);
@@ -444,6 +558,13 @@ static void on_launch(void* self, const float* pos, const float* vel, float scal
         if (e) ent_name(e, s.name, sizeof s.name); else strcpy_s(s.name, "?");
         s.camPos = camPos; s.camFwd = camFwd;
         s.t0 = t; s.hold = g_wasAiming ? (float)(t - g_aimT0) : (t - g_releaseT < 0.3 ? (float)(g_releaseT - g_aimT0) : 0.f);
+        // The bow's pose and the game's speed right now (Launch runs inside the game's Fire, after the pose was
+        // taken): the truth to check the prediction against, and the arrow helper's offset.
+        s.fire.ok = false; s.gameSpeed = 0; read_pose(s.fire, &s.gameSpeed);
+        // The arrow's physics parameters (ammo params -> particle params: air resistance, gravity vector).
+        s.physOk = false;
+        uintptr_t ap = F<uintptr_t>(p, PR_AMMOPARAMS), pp = ap && kc::readable(ap + AP_PARTICLE, 8) ? F<uintptr_t>(ap, AP_PARTICLE) : 0;
+        if (pp && kc::readable(pp, PP_GRAVITY + 12)) { s.physK = F<float>(pp, PP_AIRRES); s.physG = rd3(pp + PP_GRAVITY); s.physOk = std::isfinite(s.physK + s.physG.x + s.physG.y + s.physG.z); }
         InterlockedExchange(&g_shotReady, 1);
     } __except (EXCEPTION_EXECUTE_HANDLER) { logf("exception reading a launched arrow - calibration off"); g_dead = true; }
 }
@@ -493,12 +614,29 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     else g_lockVel = V3{};
     g_lockPrev = tp; g_lockHasPrev = true;
 
-    V3 origin = g_cal.origin(camPos, camFwd);
-    float speed = g_cal.speed_at((float)(now - g_aimT0));
-    mk::Solution s = mk::solve(origin, tp, g_lead ? g_lockVel : V3{}, speed, g_cal.flight);
+    // Where the arrow will start, which way it will go and how fast: the bow's live pose and the game's speed
+    // formula when readable (round 4), else the camera plus the offsets measured from earlier arrows.
+    mk::LivePose lp; float gameSpeed = 0;
+    bool live = read_pose(lp, &gameSpeed) && (lp.pos - camPos).len() < 3.f;
+    V3 origin, launchDir; float speed;
+    if (live) {
+        origin = mk::launch_point(lp, g_haveSlot ? g_slot : V3{});
+        g_off.update(lp.dir, camFwd, dt, 0.03f);
+        launchDir = lp.dir;
+        speed = gameSpeed > 0 ? gameSpeed * g_speedChk.ratio : g_cal.speed_at((float)(now - g_aimT0));
+    } else {
+        g_off.have = false;
+        origin = g_cal.origin(camPos, camFwd);
+        launchDir = mk::dir_of(mk::yaw_of(camFwd) + g_cal.yawOff, mk::pitch_of(camFwd) + g_cal.pitchOff);
+        speed = g_cal.speed_at((float)(now - g_aimT0));
+    }
+    float offY = live ? g_off.yaw : g_cal.yawOff, offP = live ? g_off.pitch : g_cal.pitchOff;
+    const mk::Flight& fl = flight_use();
+    mk::Solution s = mk::solve(origin, tp, g_lead ? g_lockVel : V3{}, speed, fl);
     if (!s.ok) { if (!g_outOfRange) logf("target out of range for this bow (%.0f m) - not aiming", (tp - origin).len()); g_outOfRange = true; g_haveLast = false; return; }
     g_outOfRange = false;
-    float wy = mk::yaw_of(s.dir) - g_cal.yawOff, wp = mk::pitch_of(s.dir) - g_cal.pitchOff;
+    // The camera direction that makes the bow point along the wanted launch direction.
+    float wy = mk::yaw_of(s.dir) - offY, wp = mk::pitch_of(s.dir) - offP;
     float ey = mk::wrap_pi(wy - mk::yaw_of(camFwd)), ep = wp - mk::pitch_of(camFwd);
     float fy = 0, fp = 0;
     if (g_haveLast && dt > 0.f) { fy = mk::wrap_pi(wy - g_lastYaw) / dt; fp = (wp - g_lastPitch) / dt; if (fabsf(fy) > 3.f || fabsf(fp) > 3.f) fy = fp = 0; }
@@ -507,17 +645,20 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     mk::Steer st = g_steer; st.maxRate *= std::min(1.f, 0.3f + 0.7f * (float)(now - g_acqT) / 0.4f);
     float dy, dp; st.step(ey, ep, fy, fp, dt, dy, dp);
 
-    // Where would an arrow loosed right now cross the target?  (current camera + measured offsets)
+    // Where would an arrow loosed right now cross the target?  (the bow's pose as it is this frame)
     V3 lead = g_lead ? g_lockVel * s.tof : V3{}, tFut = tp + lead, at;
-    V3 launch = mk::dir_of(mk::yaw_of(camFwd) + g_cal.yawOff, mk::pitch_of(camFwd) + g_cal.pitchOff);
-    float gap = mk::impact_near(origin, launch, speed, g_cal.flight, tFut, at) ? (at - tFut).len() : -1.f;
-    g_aim.target = g_lock; g_aim.point = tp; g_aim.dist = (tp - origin).len(); g_aim.errYaw = ey; g_aim.errPitch = ep; g_aim.speed = speed; g_aim.bone = bone; g_aim.t = now; g_aim.gap = gap;
+    float gap = mk::impact_near(origin, launchDir, speed, fl, tFut, at) ? (at - tFut).len() : -1.f;
+    g_aim.target = g_lock; g_aim.point = tp; g_aim.dist = (tp - origin).len(); g_aim.errYaw = ey; g_aim.errPitch = ep; g_aim.speed = speed; g_aim.bone = bone; g_aim.t = now;
+    g_aim.gap = gap; g_aim.at = at; g_aim.origin = origin; g_aim.dir = launchDir; g_aim.live = live;
     if (g_marker && gap >= 0 && !InterlockedCompareExchange(&g_markerReady, 0, 0)) {
-        // Impact: a cross (green on the head, within 8 cm; else yellow); head: a small white cross.
+        // Impact: a cross where this arrow would land - green when within 8 cm of the head BONE, yellow when off,
+        // orange when the head is only estimated from the body's box (never green then).  Head: a small white cross.
         float r = 0.06f + 0.002f * g_aim.dist, h = 0.04f + 0.001f * g_aim.dist; bool on = gap < 0.08f;
-        sprintf_s(g_markerLua, "local a,b=%.3f,%.3f;local x,y,z=%.3f,%.3f,%.3f;System.DrawLine({x=x-a,y=y,z=z},{x=x+a,y=y,z=z},%d,%d,0,1);System.DrawLine({x=x,y=y,z=z-a},{x=x,y=y,z=z+a},%d,%d,0,1);"
+        float cr = 1, cg = 1, cb = 0;
+        if (!bone && !animal) { cr = 1; cg = 0.5f; cb = 0; } else if (on) { cr = 0; cg = 1; cb = 0; }
+        sprintf_s(g_markerLua, "local a,b=%.3f,%.3f;local x,y,z=%.3f,%.3f,%.3f;System.DrawLine({x=x-a,y=y,z=z},{x=x+a,y=y,z=z},%.1f,%.1f,%.1f,1);System.DrawLine({x=x,y=y,z=z-a},{x=x,y=y,z=z+a},%.1f,%.1f,%.1f,1);"
                   "x,y,z=%.3f,%.3f,%.3f;System.DrawLine({x=x-b,y=y,z=z},{x=x+b,y=y,z=z},1,1,1,1);System.DrawLine({x=x,y=y,z=z-b},{x=x,y=y,z=z+b},1,1,1,1)",
-                  r, h, at.x, at.y, at.z, on ? 0 : 1, 1, on ? 0 : 1, 1, tFut.x, tFut.y, tFut.z);
+                  r, h, at.x, at.y, at.z, cr, cg, cb, cr, cg, cb, tFut.x, tFut.y, tFut.z);
         InterlockedExchange(&g_markerReady, 1);
     }
 
@@ -541,9 +682,9 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
 
     if (kc::g_debug && now - g_logT > 0.5) {
         g_logT = now;
-        logf("aim: target %.1f m (%s), arrow %.1f m/s %s, flight %.2f s, lead (%.1f %.1f) m/s, error yaw %+.2f pitch %+.2f deg, turn %+.2f %+.2f deg, predicted impact %.0f cm from the aim point",
-             (tp - origin).len(), bone ? "head bone" : animal ? "chest" : "box", speed, g_cal.measured() ? "measured" : "GUESS", s.tof, g_lockVel.x, g_lockVel.y,
-             mk::deg(ey), mk::deg(ep), mk::deg(dy), mk::deg(dp), gap * 100.f);
+        logf("aim: target %.1f m (%s), arrow %.1f m/s (%s), bow vs camera yaw %+.2f pitch %+.2f deg, flight %.2f s, lead (%.1f %.1f) m/s, error yaw %+.2f pitch %+.2f deg, turn %+.2f %+.2f deg, predicted impact %.0f cm from the aim point",
+             (tp - origin).len(), bone ? "head bone" : animal ? "chest" : "box", speed, live ? (gameSpeed > 0 ? "game formula" : "bow pose, measured speed") : (g_cal.measured() ? "camera + measured" : "GUESS"),
+             mk::deg(offY), mk::deg(offP), s.tof, g_lockVel.x, g_lockVel.y, mk::deg(ey), mk::deg(ep), mk::deg(dy), mk::deg(dp), gap * 100.f);
     }
 }
 
@@ -596,7 +737,7 @@ static void* SsUpdateHook(void* self, void* a, void* b, void* c) {
 
 // ---------------- resolve ----------------
 struct Found { uintptr_t ssUpdate, ssExec, fwGlobal, clientActor, sysGlobal, viewCamera, getEntity, bounds, getActor, mkIter, iterNext, iterRel, deadByHp, launch,
-                launchArrow, getChar, slotTM, ciPose, ciSkel, jointId, absJoint, jointCount, jointName; };
+                launchArrow, getChar, slotTM, ciPose, ciSkel, jointId, absJoint, jointCount, jointName, loadout, wsys, launchPose, bowSpeed; };
 static bool resolve(kc::Resolver& R, Found& f) {
     G.vtSS = R.vtable("CScriptSystem", ".?AVCScriptSystem@@", 0);
     uintptr_t cur = G.vtSS ? ((uintptr_t*)G.vtSS)[1] : 0;
@@ -647,6 +788,15 @@ static bool resolve(kc::Resolver& R, Found& f) {
     f.jointName = R.slot("CDefaultSkeleton::GetJointNameByID", G.vtDefSkel, 6, SIG_JOINTNAME);
     G.vtPose = R.vtable("CSkeletonPose", ".?AVCSkeletonPose@@", 0);
     f.absJoint = R.slot("CSkeletonPose::GetAbsJointByID", G.vtPose, 27, SIG_ABSJOINT);
+    // The bow's launch pose and speed: the calls of the game's own trajectory preview.
+    uintptr_t pv = R.find("bow trajectory preview", SIG_PREVIEW);
+    if (pv) {
+        f.loadout = R.branch("actor loadout", pv + 7); f.wsys = R.branch("weapon system", pv + 0x20);
+        f.launchPose = R.branch("bow launch pose", pv + 0x3D); f.bowSpeed = R.branch("arrow speed formula", pv + 0x5F);
+        if (!R.verify("actor loadout", f.loadout, SIG_LOADOUT)) f.loadout = 0;
+        if (!R.verify("bow launch pose", f.launchPose, SIG_LAUNCHPOSE)) f.launchPose = 0;
+        if (!R.verify("arrow speed formula", f.bowSpeed, SIG_BOWSPEED)) f.bowSpeed = 0;
+    }
     R.find("actor combat state (layout)", SIG_COMBATMODE);
     R.find("look-angle tick (layout)", SIG_LOOKTICK);
     R.find("bow aim start (layout)", SIG_AIMSTART);
@@ -685,9 +835,10 @@ static DWORD WINAPI Init(LPVOID) {
     g_remember = kc::ini_int("Options", "RememberBow", 1) != 0;
     g_policy.animals = kc::ini_int("Options", "TargetAnimals", 1) != 0;
     g_lead = kc::ini_int("Options", "LeadMovingTargets", 1) != 0;
+    g_live = kc::ini_int("Options", "BowPose", 1) != 0;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.3.0 (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.4.0 (game ts 0x%08X)", R.im.timestamp);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     G.fwGlobal = f.fwGlobal; G.sysGlobal = f.sysGlobal;
@@ -698,6 +849,7 @@ static DWORD WINAPI Init(LPVOID) {
     G.getChar = (GetChar_t)f.getChar; G.slotTM = (SlotTM_t)f.slotTM; G.ciPose = (CiGet_t)f.ciPose; G.ciSkel = (CiGet_t)f.ciSkel;
     G.jointId = (JointId_t)f.jointId; G.absJoint = (AbsJoint_t)f.absJoint;
     g_jointCount = (JointCount_t)f.jointCount; g_jointName = (JointName_t)f.jointName;
+    G.loadout = (Loadout_t)f.loadout; G.wsys = (WSys_t)f.wsys; G.launchPose = (LaunchPose_t)f.launchPose; G.bowSpeed = (BowSpeedFn_t)f.bowSpeed;
     G.imgLo = R.im.base; G.imgHi = R.im.end; G.textLo = R.im.text0; G.textHi = R.im.text1;
     load_calib();
     kc::write_ptr(&((void**)G.vtProjectile)[35], (void*)&LaunchHook);
@@ -709,6 +861,7 @@ static DWORD WINAPI Init(LPVOID) {
          g_hostileOnly ? "people only when in combat" : "anyone you aim at", g_headBone ? "head bone" : "head from box");
     logf("targets: people %s, animals %s, horses %s, dogs %s; impact marker %s", g_policy.people ? "yes" : "no", g_policy.animals ? "yes" : "no",
          g_policy.horses ? "yes" : "no", g_policy.dogs ? "yes" : "no", g_marker ? "on" : "off");
+    logf("arrow path: %s", g_live ? "from the bow's live arrow joint and the game's speed formula (BowPose=1)" : "from the camera plus measured offsets (BowPose=0)");
     return 0;
 }
 KC_PLUGIN("Theatrical AutoMarksman", KC_AUTHOR, 10)

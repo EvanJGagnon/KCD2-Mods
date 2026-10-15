@@ -124,3 +124,23 @@ offsets, moving targets, rate cap, bow sway still causing misses).
 - "Too short to measure" with 96 samples: the arrow entity moves with the physics step, so at 135 fps the same
   position repeats and the old fit cut the track there. The track now keeps distinct positions only and the
   fit uses height against distance (plus a time-offset-tolerant distance/time term for drag).
+
+## Round 3 findings (0.4.0)
+
+- **The arrow does not start at the camera or fly along the camera ray.** Static trace of the player shot:
+  Firing action anim event -> 0x2896788 -> Fire 0x28999C8 -> 0x289F7A0 -> `Launch` via `[rax+0x118]` at 0x289F9DA
+  (speedScale 1.0). Pose: GetLaunchPose 0x289B28C(sys, out{pos, up, dir}, actor, bow): the bow's "arrow" attachment
+  joint (fallback static helper "arw_01"); dir = joint -Z, up = joint +Y (player with `wh_w_AimByProjectile` 1, the
+  default). The launch point is the joint minus the arrow's "slt_0" helper offset in the frame (dir x up, dir, up).
+  No random spread for the player (0x2895680 returns dir unchanged); inaccuracy is the bow joint's own sway.
+- Speed: 0x289B594(sys, power, bow, ammo, soul) -> C_RPGCombat vtbl[6] 0x726A94; power = draw charge (1.0 when
+  fully drawn, from C_ActorActionShootingAiming). vtbl[23] (strength) is not on this path.
+- Loadout: `([C_Actor+0x280])->0x7F3310()`: bow +0x40, ammo +0x48; soul = `[C_Actor+0x668]`.
+- The game's own preview (cvar `wh_w_DebugTrajectory`, Aiming update 0x28A0E70 -> 0x28962C8) makes exactly these
+  calls every frame; the mod finds them through that block (SIG_PREVIEW) and calls them read-only while aiming.
+- Arrow physics: `CProjectile+0x68` ammo params -> `+0x88` particle params: air resistance +0x24, gravity Vec3 +0x44.
+- Round 3 data: with 0.3.0's averaged camera offset, the pitch offset used vs the real one differed by -0.35..+0.61
+  deg; that alone explains the measured misses (4/18/6/3/15 cm explained vs 5/18/10/5/16 cm measured, marksim 21).
+- Head bone: every round 3 lookup fell back to the box with no reason logged. The lookup matches Entity.GetBonePos
+  step for step; it now logs the failing step, accepts a vtable with the same functions, and searches the
+  skeleton's joint names (CDefaultSkeleton vtbl[1] count, vtbl[6] name) for "head" if "Bip01 Head" is absent.

@@ -8,6 +8,7 @@
 // of failures.
 #include "../src/mk_ballistics.h"
 #include "../src/mk_target.h"
+#include "../src/mk_pose.h"
 #include <cstdio>
 #include <cstdint>
 #include <vector>
@@ -318,6 +319,111 @@ int main() {
         Cand near[] = {{7, rad(11.f), 30.f, K_PERSON}};
         Lock L3; L3.id = 7; L3.update(near, 1, p, false);
         check(L3.id == 7, "while the mod steers, a small drift outside the cone does not drop the target");
+    }
+    printf("19. arrow helper offset: learnt from one launch, applied to the next\n");
+    {
+        bool ok = true;
+        for (int i = 0; i < 50; i++) {
+            V3 dir = dir_of(rnd(-3, 3), rnd(-0.5f, 0.5f)), side = cross(dir, V3{0, 0, 1}).norm(), up = cross(side, dir).norm();
+            V3 t{rnd(-0.1f, 0.1f), rnd(-0.6f, 0.1f), rnd(-0.05f, 0.05f)}, joint{rnd(-50, 50), rnd(-50, 50), rnd(0, 40)};
+            V3 launch = joint - slot_shift(dir, up, t);
+            V3 back = slot_learn(dir, up, joint - launch);
+            LivePose lp; lp.pos = joint; lp.dir = dir; lp.up = up;
+            ok = ok && (back - t).len() < 1e-4f && (launch_point(lp, back) - launch).len() < 1e-4f;
+        }
+        check(ok, "joint -> launch point -> offset -> launch point round trip (50 random poses)");
+    }
+    printf("20. judging a real arrow: signed miss where it crosses the target's distance\n");
+    {
+        TrueArrow w{9.0f, 0.0f}; V3 p0{0, 0, 1.6f}; V3 head{1.0f, 30.f, 1.7f};
+        // aim 10 cm high and 5 cm right of the head
+        V3 want = head + V3{0.05f * 30.f / 30.f, 0, 0.10f};
+        Flight f; f.g = 9.0f; f.k = 0; Solution s = solve(p0, want, V3{}, 70.f, f);
+        ShotTrack tr; tr.p0 = p0; tr.v0 = s.dir * 70.f; shoot(w, p0, tr.v0, head, V3{}, &tr, 135.f);
+        V3 h = heading(tr.v0), at; float tc = 0; V3 r = head - p0; float d = r.x * h.x + r.y * h.y;
+        bool got = crossing(tr, p0, h, d, at, tc); float up = 0, right = 0; if (got) miss_parts(h, at, head, up, right);
+        printf("     crossing after %.3f s: %+.1f cm up, %+.1f cm right (aimed +10 up, +5 right)\n", tc, up * 100, right * 100);
+        check(got && std::fabs(up - 0.10f) < 0.01f && std::fabs(right - 0.05f) < 0.01f, "signed up/right miss recovered within 1 cm");
+    }
+    printf("21. round 3 replay (Evan's real arrows, 0.3.0): fixed camera offsets explain the misses\n");
+    {
+        // From kcd2_automarksman.log (round 3): each arrow's real launch vs camera (yaw, pitch deg), distance to the
+        // aim point at release, the closest approach the mod measured (cm), and the calibration as loaded (round 2).
+        struct Shot { int n; float yaw, pitch, dist, closest; bool aimed = false; };
+        Shot sh[] = {{2, -0.17f, 2.30f, 13.0f, 5}, {3, 0.01f, 2.03f, 27.0f, 18}, {4, -0.00f, 2.04f, 19.1f, 10}, {5, 0.14f, 2.22f, 7.2f, 5},
+                     {6, 0.54f, -0.13f, 0, 0}, {7, 0.54f, 2.05f, 0, 0}, {8, -0.11f, 2.31f, 11.8f, 16}};
+        for (auto& x : sh) x.aimed = x.dist > 0;
+        Calib c; c.shots = 1; c.yawOff = -0.001578f; c.pitchOff = 0.043052f;
+        printf("     arrow  dist   offset used -> real (pitch deg)   explained   measured\n");
+        bool ok = true;
+        for (auto& x : sh) {
+            float usedY = c.yawOff, usedP = c.pitchOff;
+            V3 cf{0, 1, 0}; V3 v = dir_of(rad(x.yaw), rad(x.pitch)) * 76.f;
+            if (x.aimed) {
+                float ey = rad(x.yaw) - usedY, ep = rad(x.pitch) - usedP;
+                float expl = std::sqrt(ey * ey + ep * ep) * x.dist * 100.f;
+                printf("     %5d %5.1f m   %+.2f -> %+.2f            %5.1f cm   %5.0f cm\n", x.n, x.dist, deg(usedP), x.pitch, expl, x.closest);
+                ok = ok && std::fabs(expl - x.closest) < 8.f;
+                // With the bow's live pose the direction used is the bow's own: what remains is only how much the
+                // bow turns between the last aimed frame and the shot (not in this log; checked in game).
+            }
+            c.on_launch(V3{0, 0.55f, 0}, v, V3{}, cf, 2.f);
+        }
+        check(ok, "every aimed round 3 miss is within 8 cm of what the camera-offset error alone predicts");
+        check(std::fabs(deg(c.pitchOff) - 1.851f) < 0.01f, "the replayed calibration ends where Evan's file does (pitch offset 1.851 deg)");
+    }
+    printf("22. live bow pose: bow pitch depends on the view and sways; the impact still lands on the head\n");
+    {
+        TrueArrow w{9.0f, 0.0f}; Flight fl; fl.g = 9.0f; fl.k = 0;
+        V3 slot{0.0f, -0.62f, 0.01f};
+        // The world's bow: points 2.1 deg above the camera plus 4% of the view pitch, sways 0.15 deg at 0.6 Hz.
+        auto bow_pose = [&](const Cam& cm, float t) {
+            LivePose lp; float pit = cm.pitch + rad(2.1f) + 0.04f * cm.pitch + rad(0.15f) * std::sin(t * 3.77f);
+            float yw = cm.yaw + rad(0.1f) * std::sin(t * 2.3f);
+            lp.dir = dir_of(yw, pit); V3 side = cross(lp.dir, V3{0, 0, 1}).norm(); lp.up = cross(side, lp.dir).norm();
+            lp.pos = cm.pos + side * 0.05f + lp.dir * 0.6f - lp.up * 0.04f; lp.ok = true; return lp; };
+        float worstGap = 0, worstReal = 0, worstOld = 0;
+        for (float dist : {8.f, 15.f, 30.f, 45.f, 60.f}) for (int rep = 0; rep < 6; rep++) {
+            Cam cam; cam.yaw = rnd(-0.3f, 0.3f); cam.pitch = rnd(-0.05f, 0.05f);
+            V3 head{rnd(-3, 3), dist, 1.7f + rnd(-1.f, 3.f)};
+            Steer st; PoseOffset off; float dt = 1.f / 120.f, lastY = 0, lastP = 0; bool first = true; float gap = 1;
+            float tRel = 1.2f + rnd(0, 0.8f);
+            for (float t = 0; t < tRel; t += dt) {
+                LivePose lp = bow_pose(cam, t); V3 o = launch_point(lp, slot);
+                off.update(lp.dir, cam.fwd(), dt, 0.03f);
+                Solution s = solve(o, head, V3{}, 76.f, fl);
+                float wy = yaw_of(s.dir) - off.yaw, wp = pitch_of(s.dir) - off.pitch;
+                float ey = wrap_pi(wy - cam.yaw), ep = wp - cam.pitch, dy, dp;
+                float fy = first ? 0.f : wrap_pi(wy - lastY) / dt, fp = first ? 0.f : (wp - lastP) / dt; first = false; lastY = wy; lastP = wp;
+                st.step(ey, ep, fy, fp, dt, dy, dp); cam.yaw = wrap_pi(cam.yaw + dy); cam.pitch += dp;
+                V3 at; if (impact_near(o, lp.dir, 76.f, fl, head, at)) gap = (at - head).len();
+            }
+            // The game fires ~80 ms later (animation event), from the bow's pose at that moment.
+            LivePose f = bow_pose(cam, tRel + 0.08f); V3 p0 = launch_point(f, slot);
+            float real = shoot(w, p0, f.dir * 76.f, head, V3{});
+            // The 0.3.0 way: camera + a fixed offset (the average bow offset), same camera.
+            float oldReal = 0;
+            {
+                Cam c2; c2.yaw = rnd(-0.3f, 0.3f); c2.pitch = 0; Calib cal; cal.yawOff = 0; cal.pitchOff = rad(2.1f); cal.originOff = V3{0.05f, -0.02f, -0.04f}; cal.speed = 76.f; cal.flight = fl;
+                Steer st2; float lY = 0, lP = 0; bool fr = true; float t = 0;
+                for (; t < tRel; t += dt) {
+                    V3 o = cal.origin(c2.pos, c2.fwd()); Solution s = solve(o, head, V3{}, 76.f, fl);
+                    float wy = yaw_of(s.dir) - cal.yawOff, wp = pitch_of(s.dir) - cal.pitchOff, ey = wrap_pi(wy - c2.yaw), ep = wp - c2.pitch, dy, dp;
+                    float fy = fr ? 0.f : wrap_pi(wy - lY) / dt, fp = fr ? 0.f : (wp - lP) / dt; fr = false; lY = wy; lP = wp;
+                    st2.step(ey, ep, fy, fp, dt, dy, dp); c2.yaw = wrap_pi(c2.yaw + dy); c2.pitch += dp;
+                }
+                LivePose f2 = bow_pose(c2, tRel + 0.08f); oldReal = shoot(w, launch_point(f2, slot), f2.dir * 76.f, head, V3{});
+            }
+            worstGap = std::max(worstGap, gap); worstReal = std::max(worstReal, real); worstOld = std::max(worstOld, oldReal);
+        }
+        printf("     worst predicted impact at release %.3f m; worst real arrow %.3f m (0.3.0 fixed offsets: %.3f m)\n", worstGap, worstReal, worstOld);
+        check(worstGap < 0.05f, "the predicted impact from the live pose stays on the head while the bow sways (8-60 m)");
+        check(worstReal < 0.12f && worstReal < 0.5f * worstOld, "real arrows (bow fired 80 ms after release, still swaying) land on the head; fixed offsets miss far more");
+    }
+    printf("23. speed check: the game's formula is trusted; odd shots are reported, not learnt\n");
+    {
+        SpeedCheck sc; bool a = sc.add(76.2f, 76.2f), b = sc.add(60.5f, 76.2f), c = sc.add(77.0f, 76.2f);
+        check(a && !b && c && std::fabs(sc.ratio - 1.f) < 0.02f, "a 21% slower arrow (round 3, 15.6 s hold) does not change the speed used");
     }
     printf("%s (%d failed)\n", g_fail ? "FAILED" : "ALL PASSED", g_fail);
     return g_fail;

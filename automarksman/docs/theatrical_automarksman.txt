@@ -1,4 +1,4 @@
-THEATRICAL AUTOMARKSMAN 0.3.0 (TEST BUILD) - Kingdom Come: Deliverance II
+THEATRICAL AUTOMARKSMAN 0.4.0 (TEST BUILD) - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 While Henry holds a drawn bow, the camera turns gently onto the head of the person (or the chest of the
@@ -6,19 +6,23 @@ animal) nearest the centre of your view, so that the arrow, not the middle of th
 People come first; your horse and dogs are left alone. The lock is soft: move the mouse and it lets
 go; look away from the target and it is released, and the assist then picks whoever you are now
 looking at. With ShowImpactMarker=1 a cross shows where an arrow loosed now would hit (green when it
-is on the head) and a small white cross marks the head. It allows for the arrow's drop, for air
-drag, for the bow sitting beside Henry's eye and for a target that is walking or running.
+is on the head bone, orange when the head could only be estimated) and a small white cross marks the
+head. It allows for the arrow's drop, for air drag and for a target that is walking or running.
+
+The arrow does not fly where the camera looks: the game launches it from the bow's own arrow joint,
+along the bow's axis, which sits a couple of degrees off the view and moves as the bow sways. The mod
+reads that live bow pose every frame (the same way the game's own trajectory preview does) and the
+arrow speed the game's formula gives for your bow and arrow, and steers until that real path crosses
+the head.
 
 That is all it does. You still draw, hold and release the bow yourself. The game flies the arrow, sways
 the bow with Henry's skill and stamina, and decides whether the arrow hits. Nothing is teleported, no
 hit is forced, and no item, arrow or stat is changed.
 
-The mod learns your bow as you shoot: each arrow Henry looses tells it the real launch speed of that
-bow, arrow and draw (the game works it out from the bow, the arrow and Henry's strength), and the arrow
-is followed in flight to measure its drop. What it learned is saved in kcd2_automarksman_calibration.txt
-next to the DLL, so it is ready in your next session too. Only the very first arrow, or the first arrow
-after you change bow or arrows, uses a guess; the game tells you so on screen ("your first arrow
-measures this bow") and confirms when the bow has been measured.
+Every arrow Henry looses is checked: the log compares its real launch with what the mod predicted, and
+says how far above/below and left/right of the head it really passed. The first arrow also reads the
+arrow's physics (gravity and air resistance). If the bow pose cannot be read, the mod falls back to the
+camera plus offsets measured from earlier arrows (kcd2_automarksman_calibration.txt).
 
 This is a test build.
 
@@ -49,11 +53,12 @@ SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
             HostileOnly=0         1 = people only while they are in combat
             TargetHorses=0, TargetDogs=0   horses and dogs (off: your own are never aimed at)
             ShowImpactMarker=1    draw the predicted impact and the head
+            BowPose=1             aim with the bow's live pose (0 = camera plus measured offsets)
             HeadBone=1            aim at the head bone (0 = estimate the head from the body's size)
             HeadAboveBoneCm=8     how far above the head bone to aim (the bone is at the base of the skull)
             HeadDropCm=13         without the bone: aim this far below the top of a person
             HandsOffMs=400        pause after you move the mouse
-            ArrowSpeed=55         arrow speed guessed before the first arrow is measured
+            ArrowSpeed=55         arrow speed guess (only without the bow pose)
             RememberBow=1         keep what was measured for the next session
             LeadMovingTargets=1   aim ahead of moving targets
             TargetPeople=1, TargetAnimals=1
@@ -61,9 +66,9 @@ SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
 
 KNOWN LIMITATIONS
   - It does not check whether a wall or tree is between you and the target.
-  - It cannot see which bow you hold before you shoot: after a change of bow or arrows, the first arrow
-    flies with the old bow's numbers and measures the new one.
-  - Bow sway is left alone: a shaky, low-skill or tired Henry still misses.
+  - The aim assumes a full draw; an arrow loosed early is slower and drops more.
+  - The game fires the arrow a moment after you release (on the animation), so a bow that is still
+    swaying then can still move the arrow a little. A shaky, low-skill or tired Henry still misses.
   - Only tested statically against the Steam version 1.5.x, build 15693.
 
 GAME UPDATES

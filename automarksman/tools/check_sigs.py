@@ -39,6 +39,7 @@ PLAN = {
     'SIG_JOINTCOUNT':     ('slot', '.?AVCDefaultSkeleton@@', 1, 0x1AAF020),
     'SIG_JOINTNAME':      ('slot', '.?AVCDefaultSkeleton@@', 6, 0x5AF5BC),
     'SIG_COMBATMODE':     ('find', 0x117F1E8),
+    'SIG_PREVIEW':        ('find', 0x2896326),
 }
 RTTI_ONLY = ['.?AVC_Player@entitymodule@wh@@', '.?AVC_MissileWeaponPlayerController@entitymodule@wh@@', '.?AVCArrow@entitymodule@wh@@',
              '.?AVC_Human@entitymodule@wh@@', '.?AVC_NPCActor@entitymodule@wh@@', '.?AVC_Horse@entitymodule@wh@@', '.?AVC_Dog@entitymodule@wh@@', '.?AVC_Animal@entitymodule@wh@@']
@@ -99,6 +100,14 @@ def main():
     ok = a is not None and l is not None and (a == l or (mem[a] == 0xE9 and a + 5 + struct.unpack_from('<i', mem, a + 1)[0] == l))
     fails += not ok
     print(f'{"ok  " if ok else "FAIL"} CArrow[35] = {hex(a) if a is not None else "no vtable"} -> CProjectile::Launch {hex(l) if l is not None else "?"}')
+    # calls taken from the trajectory preview block, each checked against its own signature
+    m = scan(pat(sigs['SIG_PREVIEW']))
+    for nm, off, sg, ref in (('loadout', 7, 'SIG_LOADOUT', 0x7F3310), ('weapon system', 0x20, None, 0x189F3C0),
+                             ('launch pose', 0x3D, 'SIG_LAUNCHPOSE', 0x289B28C), ('arrow speed', 0x5F, 'SIG_BOWSPEED', 0x289B594)):
+        tg = None
+        if m and mem[m[0] + off] == 0xE8: tg = m[0] + off + 5 + struct.unpack_from('<i', mem, m[0] + off + 1)[0]
+        ok = tg == ref and (sg is None or at(pat(sigs[sg]), tg)); fails += not ok
+        print(f'{"ok  " if ok else "FAIL"} preview call {nm}: {hex(tg) if tg is not None else "?"}')
     # globals the mod reads through rip-relative operands
     m = scan(pat(sigs['SIG_GENV_SYSTEM']))
     if m: a = m[0] + 13; print(f'     gEnv.pSystem global at {hex(a + 4 + struct.unpack_from("<i", mem, a)[0])} (expected 0x492d8c0)')
