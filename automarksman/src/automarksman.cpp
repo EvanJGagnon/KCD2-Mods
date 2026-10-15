@@ -226,6 +226,7 @@ static bool g_crossbowDiag = false;
 static double g_diagNext = 0, g_diagPrevT = 0;
 static bool g_diagPrevValid = false, g_diagPrevOn = false;
 static V3 g_diagPrevPose, g_diagPrevView;
+static float g_diagSwayPeakRaw = 0.f;   // max raw native view sway during this diagnostic sample
 
 // What the aim looked like on the last frame the mod steered (for the per-shot log).
 static struct { uint32_t target; V3 point, at, origin, dir; float dist, errYaw, errPitch, speed, gap; bool bone, live; double t; } g_aim;
@@ -342,6 +343,9 @@ static uint8_t* SwayHook(void* self, uint8_t* out) {
         if (out && out[0]) {
             float* v = (float*)(out + 4); float k = g_swayScale;
             float m = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (m > g_swayPeakRaw) g_swayPeakRaw = m;
+            // The native sway sample already incorporates Henry's live stats/condition.
+            // Measure it without changing the source or assuming a particular skill level.
+            if (g_crossbowDiag && g_family == FAM_CROSSBOW && m > g_diagSwayPeakRaw) g_diagSwayPeakRaw = m;
             v[0] *= k; v[1] *= k; v[2] *= k;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
@@ -871,16 +875,29 @@ static void crossbow_diagnostic(double now, uintptr_t look, const V3& camPos, co
     mk::LivePose lp; float predictedSpeed = 0;
     bool got = read_pose(lp, &predictedSpeed) && (lp.pos - camPos).len() < 3.f;
     float cameraStep = 0, poseStep = 0;
-    if (g_diagPrevValid && g_diagPrevOn == g_on && got) {
+    float camDYaw = 0, camDPitch = 0, poseDYaw = 0, poseDPitch = 0;
+    bool continuous = g_diagPrevValid && g_diagPrevOn == g_on && got;
+    if (continuous) {
         cameraStep = mk::deg(mk::angle_between(camFwd, g_diagPrevView));
         poseStep = mk::deg(mk::angle_between(lp.dir, g_diagPrevPose));
+        camDYaw = mk::deg(mk::wrap_pi(mk::yaw_of(camFwd) - mk::yaw_of(g_diagPrevView)));
+        camDPitch = mk::deg(mk::pitch_of(camFwd) - mk::pitch_of(g_diagPrevView));
+        poseDYaw = mk::deg(mk::wrap_pi(mk::yaw_of(lp.dir) - mk::yaw_of(g_diagPrevPose)));
+        poseDPitch = mk::deg(mk::pitch_of(lp.dir) - mk::pitch_of(g_diagPrevPose));
     }
     float reqX = F<float>(look, L_REQUEST), reqZ = F<float>(look, L_REQUEST + 8);
+    float rawNativeSway = g_on ? mk::deg(g_diagSwayPeakRaw) : -1.f;
+    g_diagSwayPeakRaw = 0.f;
     if (got) {
         float offY = mk::deg(mk::wrap_pi(mk::yaw_of(lp.dir) - mk::yaw_of(camFwd)));
         float offP = mk::deg(mk::pitch_of(lp.dir) - mk::pitch_of(camFwd));
-        KC_DLOG("crossbow diagnostic: F4=%s target=%s input=(%.4f %.4f) camera_step=%.3f deg weapon_step=%.3f deg weapon_vs_camera=(yaw %+.3f pitch %+.3f) speed=%.1f",
-                 g_on ? "ON" : "OFF", g_lock ? "YES" : "NONE", reqX, reqZ, cameraStep, poseStep, offY, offP, predictedSpeed);
+        // Signed deltas distinguish camera/weapon movement from relative aim drift.
+        // Relative drift can also come from pose lag/IK; it is NOT proof of an independent animation.
+        KC_DLOG("crossbow diagnostic: F4=%s target=%s sample=%s dt=%.3f input=(%.4f %.4f) camera_step=%.3f deg weapon_step=%.3f deg cam_delta=(yaw %+.3f pitch %+.3f) weapon_delta=(yaw %+.3f pitch %+.3f) relative_delta=(yaw %+.3f pitch %+.3f) native_sway_peak_deg_s=%.3f weapon_vs_camera=(yaw %+.3f pitch %+.3f) speed=%.1f",
+                 g_on ? "ON" : "OFF", g_lock ? "YES" : "NONE", continuous ? "OK" : "FIRST",
+                 continuous ? (float)(now - g_diagPrevT) : 0.f, reqX, reqZ, cameraStep, poseStep,
+                 camDYaw, camDPitch, poseDYaw, poseDPitch, poseDYaw - camDYaw, poseDPitch - camDPitch,
+                 rawNativeSway, offY, offP, predictedSpeed);
         g_diagPrevPose = lp.dir;
     } else {
         KC_DLOG("crossbow diagnostic: F4=%s target=%s live firing pose UNAVAILABLE",
@@ -1093,7 +1110,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_ctl.gate.settle = std::max(0, std::min(2000, kc::ini_int("Options", "SettleMs", 200))) / 1000.f;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.6.0 LOCAL DIAGNOSTIC (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.6.0 LOCAL DIAGNOSTIC 2 (game ts 0x%08X)", R.im.timestamp);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     G.fwGlobal = f.fwGlobal; G.sysGlobal = f.sysGlobal;
