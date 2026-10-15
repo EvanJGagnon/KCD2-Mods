@@ -1,5 +1,6 @@
 @echo off
-rem Builds the mods (release: out\) plus development builds and test tools (out\dev\).
+rem Builds every mod: the published ones (src\ -> out\, development builds and test tools in out\dev\) and the
+rem Theatrical Collection (theatrical\<mod>\build.bat -> theatrical\<mod>\out\).  Then: python tools\package.py
 rem Requires Visual Studio 2022 (x64 C++ tools).  Set KC_AUTHOR first, e.g.  set KC_AUTHOR=YourName
 rem Another Visual Studio edition or the Build Tools: set KC_VCVARS to its vcvars64.bat (the CI build does).
 setlocal
@@ -22,4 +23,7 @@ cl /nologo /O2 tools\markertest.cpp /Foout\obj\ /Feout\dev\kc_markertest.exe || 
 cl /nologo /O2 /EHsc tools\sharpsim.cpp /Foout\obj\ /Feout\dev\sharpsim.exe || exit /b 1
 cl /nologo /O2 /EHsc tools\forgesim.cpp /Foout\obj\ /Feout\dev\forgesim.exe || exit /b 1
 del /q out\*.exp out\*.lib out\dev\*.exp out\dev\*.lib 2>nul
+for %%m in (autolockpick autodice autopickpocket autofollow automarksman) do (
+  call theatrical\%%m\build.bat || exit /b 1
+)
 echo Build OK.
