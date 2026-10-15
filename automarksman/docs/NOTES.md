@@ -144,3 +144,21 @@ offsets, moving targets, rate cap, bow sway still causing misses).
 - Head bone: every round 3 lookup fell back to the box with no reason logged. The lookup matches Entity.GetBonePos
   step for step; it now logs the failing step, accepts a vtable with the same functions, and searches the
   skeleton's joint names (CDefaultSkeleton vtbl[1] count, vtbl[6] name) for "head" if "Bip01 Head" is absent.
+
+## Round 4 findings (0.5.0)
+
+- 0.4.0's live pose was accurate when the bow was drawn: per-shot misses 1-9 cm at 12-25 m, and the launch matched
+  the mod's last aimed frame (2-3 ms earlier) to 0.00 deg, so the marker is exact at release.
+- **Jolt:** the first frames of each draw (and after each shot, while the next arrow is nocked) put the "arrow"
+  joint far from the view: pitch -12 to -66 deg, yaw up to +152 deg. 0.4.0 steered on them at once (wanted turns
+  of 30-71 deg). 0.5.0 gates the pose (`PoseGate`, mk_pose.h): within 10 deg of the view, changing under 25 deg/s,
+  for 200 ms before any turn; once settled, up to 0.1 s of odd frames are skipped, more re-start the wait.
+- **Shake:** 0.4.0 followed each frame's offset (tau 0.03 s) and fed its derivative forward, so tremor and joint
+  noise became camera acceleration (marksim 25: 253 deg/s^2 RMS). 0.5.0 tracks the offset with a critically
+  damped filter (`SwayTrack`, bandwidth 1/SwaySmoothingMs) and feeds forward only its smooth rate and the
+  target's motion; a soft dead zone (HoldWithinCm) and an acceleration limit (570 deg/s^2) on top (32 deg/s^2).
+  The marker and the per-shot log still use the raw pose of the frame.
+- **Self-disable:** the "camera does not follow" check fired after a shot when the bow pose went far off
+  (error 22.5 -> 99.4 deg) and set the global off switch. Now it pauses 0.5 s and re-settles; only 6 trips in a row
+  with a settled, plausible bow give up steering (tracking and logging go on). Pose read faults back off 1-60 s
+  and retry; tick faults restart the aim (20 to give up). The offset yaw is wrapped (0.4.0 logged +360 deg).

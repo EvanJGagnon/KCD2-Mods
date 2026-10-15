@@ -82,6 +82,90 @@ static float aim_and_shoot(const TrueArrow& w, const Bow& bow, Calib& cal, Cam& 
     return miss;
 }
 
+// ---- round 5: the bow as the round 4 log shows it ----
+// While it is raised (and again after each shot while the next arrow is nocked) the bow's "arrow" joint points
+// far from the view and jumps; then it settles about 2 deg above the view and sways slowly (+-0.5..1 deg), with a
+// little tremor.  The onset samples are the first logged frames of each acquisition in Evan's round 4 log.
+static const float ONSET[][2] = {{-17.98f, -44.24f}, {-20.46f, -43.09f}, {-2.93f, -28.20f}, {152.11f, -65.90f}, {6.6f, -48.54f}, {3.0f, -12.23f}, {-19.35f, -31.83f}};
+struct SwayBow {
+    float onsetY = 0, onsetP = 0, onset = 0.45f;          // deg, deg, s
+    float swayP = 0.8f, swayY = 0.4f, fP = 0.45f, fY = 0.3f, tremor = 0.08f, noise = 0.05f, phase = 0;   // deg, Hz
+    // Offset of the bow from the camera (rad) at time t since the draw started; ok=false: not readable.
+    void offset(float t, float& y, float& p) const {
+        float sy = rad(swayY) * std::sin(6.2832f * fY * t + phase) + rad(tremor) * std::sin(6.2832f * 7.f * t + 1.f);
+        float sp = rad(2.1f) + rad(swayP) * std::sin(6.2832f * fP * t + phase) + rad(tremor) * std::sin(6.2832f * 8.3f * t);
+        // frame-to-frame noise of the animated joint (deterministic in t)
+        float h = std::sin(t * 12345.67f) * 43758.5453f; h -= std::floor(h); float h2 = std::sin(t * 7654.32f) * 23421.631f; h2 -= std::floor(h2);
+        sy += rad(noise) * (2 * h - 1); sp += rad(noise) * (2 * h2 - 1);
+        if (t < onset) {   // the draw animation: from the logged pose to the drawn bow, with frame-to-frame jumps
+            float u = t / onset, b = u * u * (3 - 2 * u), j = (1 - b) * rad(3.f) * std::sin(t * 97.f);
+            y = wrap_pi(rad(onsetY) * (1 - b) + sy * b + j); p = rad(onsetP) * (1 - b) + sp * b + j;
+        } else { y = sy; p = sp; }
+    }
+    LivePose pose(const Cam& cm, float t) const {
+        float y, p; offset(t, y, p); LivePose lp; lp.dir = dir_of(cm.yaw + y, cm.pitch + p);
+        V3 side = cross(lp.dir, V3{0, 0, 1}).norm(); lp.up = cross(side, lp.dir).norm();
+        lp.pos = cm.pos + side * 0.05f + lp.dir * 0.6f - lp.up * 0.04f; lp.ok = true; return lp;
+    }
+};
+float g_tol = 0.02f;     // HoldWithinCm
+struct RunStats { float onsetMove = 0, rmsRate = 0, rmsAcc = 0, maxRate = 0, hitFrac = 0, meanMiss = 0, worstHonest = 0; int frames = 0; };
+// Aim at `head` for `T` s from the start of a draw with the 0.4.0 controller (old=true: every frame's pose,
+// offset tau 0.03 s, feed-forward from the wanted direction including the bow's sway, no gate) or the 0.5.0
+// one (AimCtl).  Measures: how far the camera moved during the draw animation, the camera's angular speed in
+// steady aim (rate, and acceleration = shake), and over the steady part: how often an arrow loosed at that
+// frame lands within 8 cm of the head (round 4 log: the game launches 2-3 ms after the mod's last aimed frame,
+// from the same pose), and how far the honest marker is from where it lands.
+static RunStats aim_run(const SwayBow& bow, V3 head, bool old, float T, float swayTau = 0.1f, Cam* camOut = nullptr) {
+    TrueArrow w{9.0f, 0.0f}; Flight fl; fl.g = 9.0f; fl.k = 0; V3 slot{0.0f, -0.62f, 0.01f};
+    Cam cam; { V3 o = cam.pos; V3 d = (head - o).norm(); cam.yaw = yaw_of(d) + rad(1.5f); cam.pitch = pitch_of(d) - rad(1.0f); }
+    float dt = 1.f / 60.f; RunStats r; float y0 = cam.yaw, p0 = cam.pitch;
+    AimCtl ctl; ctl.swayTau = swayTau; ctl.glide.tol = g_tol; PoseOffset off; Steer st; float lastY = 0, lastP = 0; bool first = true;
+    double sumR2 = 0, sumA2 = 0; float prevRy = 0, prevRp = 0; int nR = 0, hits = 0, nShots = 0; double sumMiss = 0; float settledAt = -1;
+    for (float t = 0; t < T; t += dt) {
+        LivePose lp = bow.pose(cam, t); V3 o = launch_point(lp, slot);
+        Solution s = solve(o, head, V3{}, 76.f, fl);
+        float dy = 0, dp = 0; bool steering = false;
+        if (old) {
+            off.update(lp.dir, cam.fwd(), dt, 0.03f);
+            float wy = yaw_of(s.dir) - off.yaw, wp = pitch_of(s.dir) - off.pitch, ey = wrap_pi(wy - cam.yaw), ep = wp - cam.pitch;
+            float fy = first ? 0.f : wrap_pi(wy - lastY) / dt, fp = first ? 0.f : (wp - lastP) / dt; first = false; lastY = wy; lastP = wp;
+            if (std::fabs(fy) > 3.f || std::fabs(fp) > 3.f) fy = fp = 0;
+            float ramp = std::min(1.f, 0.3f + 0.7f * t / 0.4f); Steer s2 = st; s2.maxRate *= ramp;
+            s2.step(ey, ep, fy, fp, dt, dy, dp); steering = true;
+            if (t > 0.6f && settledAt < 0) settledAt = t;
+        } else {
+            float ry, rp; PoseGate::Why gw = ctl.pose(true, lp.dir, cam.fwd(), dt, ry, rp);
+            if (gw == PoseGate::OK) {
+                if (settledAt < 0) settledAt = t;
+                float ey, ep, ramp = std::min(1.f, 0.3f + 0.7f * (t - settledAt) / 0.4f);
+                ctl.turn(s.dir, cam.fwd(), ctl.off.yaw, ctl.off.pitch, ctl.off.vy, ctl.off.vp, (head - o).len(), ramp, dt, dy, dp, ey, ep); steering = true;
+            }
+        }
+        (void)steering;
+        cam.yaw = wrap_pi(cam.yaw + dy); cam.pitch += dp;
+        float rate = std::sqrt(dy * dy + dp * dp) / dt;
+        if (t < bow.onset) r.onsetMove = std::max(r.onsetMove, deg(std::sqrt(wrap_pi(cam.yaw - y0) * wrap_pi(cam.yaw - y0) + (cam.pitch - p0) * (cam.pitch - p0))));
+        if (settledAt >= 0 && t > settledAt + 0.6f) {
+            sumR2 += (double)rate * rate; nR++; r.maxRate = std::max(r.maxRate, deg(rate));
+            float ay = (dy / dt - prevRy) / dt, ap = (dp / dt - prevRp) / dt; sumA2 += (double)ay * ay + (double)ap * ap;
+            if (((int)(t / dt)) % 6 == 0) {      // a release every 0.1 s
+                LivePose nowP = bow.pose(cam, t); V3 on = launch_point(nowP, slot), at;
+                bool hv = impact_near(on, nowP.dir, 76.f, fl, head, at);
+                LivePose f = bow.pose(cam, t); V3 fp0 = launch_point(f, slot);
+                float miss = shoot(w, fp0, f.dir * 76.f, head, V3{});
+                if (hv) { // honest marker: the predicted impact vs where the arrow passes, both at the head's distance
+                    float honest = std::fabs((at - head).len() - miss); r.worstHonest = std::max(r.worstHonest, honest); }
+                nShots++; hits += miss < 0.08f; sumMiss += miss;
+            }
+        }
+        prevRy = dy / dt; prevRp = dp / dt;
+    }
+    r.rmsRate = nR ? deg((float)std::sqrt(sumR2 / nR)) : 0; r.rmsAcc = nR ? deg((float)std::sqrt(sumA2 / nR)) : 0; r.hitFrac = nShots ? (float)hits / nShots : 0; r.meanMiss = nShots ? (float)(sumMiss / nShots) : 0; r.frames = nR;
+    if (camOut) *camOut = cam;
+    return r;
+}
+
 int main() {
     printf("1. solver vs step-by-step arrows (true parameters known)\n");
     {
@@ -424,6 +508,84 @@ int main() {
     {
         SpeedCheck sc; bool a = sc.add(76.2f, 76.2f), b = sc.add(60.5f, 76.2f), c = sc.add(77.0f, 76.2f);
         check(a && !b && c && std::fabs(sc.ratio - 1.f) < 0.02f, "a 21% slower arrow (round 3, 15.6 s hold) does not change the speed used");
+    }
+    printf("24. round 5: the draw animation (logged onset poses) never turns the camera; 0.4.0 did\n");
+    {
+        float worstNew = 0, worstOld = 0;
+        for (auto& o : ONSET) {
+            SwayBow b; b.onsetY = o[0]; b.onsetP = o[1];
+            V3 head{1.f, 20.f, 1.75f};
+            worstNew = std::max(worstNew, aim_run(b, head, false, 0.5f).onsetMove);
+            worstOld = std::max(worstOld, aim_run(b, head, true, 0.5f).onsetMove);
+        }
+        printf("     camera moved during the draw: 0.5.0 %.2f deg, 0.4.0 %.2f deg\n", worstNew, worstOld);
+        check(worstNew < 0.01f, "0.5.0: no turn at all while the bow is raised (-12..-66 deg pitch, +152 deg yaw)");
+        check(worstOld > 10.f, "the same poses through the 0.4.0 logic swing the camera (the reported jolt)");
+        PoseGate g; float t = 0; int steps = 0; SwayBow b; b.onsetY = ONSET[3][0]; b.onsetP = ONSET[3][1];
+        for (; t < 2.f && !g.ready; t += 1.f / 60.f, steps++) { float y, p; b.offset(t, y, p); g.update(true, y, p, 1.f / 60.f); }
+        printf("     gate ready %.2f s after the draw started (animation %.2f s + settle %.2f s)\n", t, b.onset, g.settle);
+        check(g.ready && t < b.onset + 0.45f, "the gate opens soon after the bow is drawn");
+    }
+    printf("25. round 5: steady aim with +-0.5..1 deg sway: calm camera, arrows still on the head, honest marker\n");
+    {
+        double rN = 0, rO = 0, aN = 0, aO = 0, gN = 0, gO = 0, mN = 0; float maxN = 0, honest = 0; int n = 0;
+        for (float amp : {0.5f, 0.8f, 1.0f}) for (float dist : {12.f, 25.f, 45.f}) for (int rep = 0; rep < 3; rep++) {
+            SwayBow b; b.swayP = amp; b.swayY = amp * 0.5f; b.phase = rnd(0, 6.28f); b.fP = rnd(0.3f, 0.6f); b.onsetY = 0; b.onsetP = -40;
+            V3 head{rnd(-3, 3), dist, 1.75f + rnd(-1, 2)};
+            RunStats nw = aim_run(b, head, false, 6.f), o = aim_run(b, head, true, 6.f);
+            rN += nw.rmsRate; rO += o.rmsRate; aN += nw.rmsAcc; aO += o.rmsAcc; gN += nw.hitFrac; gO += o.hitFrac; mN += nw.meanMiss; n++;
+            maxN = std::max(maxN, nw.maxRate); honest = std::max(honest, nw.worstHonest);
+        }
+        rN /= n; rO /= n; aN /= n; aO /= n; gN /= n; gO /= n; mN /= n;
+        printf("     camera speed (RMS) 0.5.0 %.2f deg/s vs 0.4.0 %.2f; shake (RMS acceleration) %.0f vs %.0f deg/s^2; peak %.1f deg/s\n", rN, rO, aN, aO, maxN);
+        printf("     marker green (arrow within 8 cm) %.0f%% of the time vs %.0f%%; mean miss of an arrow loosed at any moment %.1f cm; marker vs real arrow worst %.1f cm\n",
+               gN * 100, gO * 100, mN * 100, honest * 100);
+        check(aN < 0.25 * aO, "camera shake is under a quarter of 0.4.0's under the same sway");
+        check(rN < 0.7 * rO && maxN < 15.f, "the camera moves less and never fast in steady aim (peak under 15 deg/s)");
+        check(mN < 0.10 && gN > 0.5, "an arrow loosed at any moment lands within 10 cm on average; the marker is green most of the time");
+        check(honest < 0.05f, "the marker shows where the arrow really goes (within 5 cm), sway included");
+    }
+    printf("26. round 5: look away, target swap, pose lost after a shot: pause and recover, never switch off\n");
+    {
+        // Target swap 8 deg away: rate and acceleration stay limited.
+        AimCtl c; float dt = 1.f / 60.f, maxRate = 0, maxAcc = 0, prev = 0, t = 0; Cam cam; float ey = 0, ep = 0;
+        for (int i = 0; i < 30; i++) { float ry, rp; c.pose(true, dir_of(cam.yaw, cam.pitch + rad(2.f)), cam.fwd(), dt, ry, rp); }
+        V3 tgt = dir_of(rad(8.f), rad(2.f));
+        for (; t < 2.f; t += dt) {
+            float ry, rp; c.pose(true, dir_of(cam.yaw, cam.pitch + rad(2.f)), cam.fwd(), dt, ry, rp);
+            float dy, dp; c.turn(tgt, cam.fwd(), c.off.yaw, c.off.pitch, c.off.vy, c.off.vp, 30.f, std::min(1.f, 0.3f + 0.7f * t / 0.4f), dt, dy, dp, ey, ep);
+            cam.yaw += dy; cam.pitch += dp; float r = std::sqrt(dy * dy + dp * dp) / dt;
+            maxRate = std::max(maxRate, deg(r)); maxAcc = std::max(maxAcc, deg(std::fabs(r - prev) / dt)); prev = r;
+        }
+        printf("     8 deg target swap: peak %.0f deg/s, peak acceleration %.0f deg/s^2, left %.3f deg\n", maxRate, maxAcc, deg(std::sqrt(ey * ey + ep * ep)));
+        check(maxRate <= 115.5f && maxAcc < 600.f && deg(std::sqrt(ey * ey + ep * ep)) < 0.1f, "the swap is smooth (rate and acceleration capped) and ends on the target");
+        // After a shot the next arrow is nocked: the pose goes far off and comes back.  The gate closes, then reopens.
+        PoseGate g; for (int i = 0; i < 30; i++) g.update(true, 0, rad(2.f), dt);
+        bool closed = false; for (int i = 0; i < 20; i++) { g.update(true, rad(-5.f), rad(-40.f + i), dt); closed |= !g.ready; }
+        float back = 0; while (!g.ready && back < 2.f) { g.update(true, 0, rad(2.f), dt); back += dt; }
+        check(closed && g.ready && back < 0.3f, "nocking the next arrow pauses the steering; it resumes 0.2 s after the bow is steady again");
+        // One bad frame while steady is skipped without closing the gate.
+        PoseGate g2; for (int i = 0; i < 30; i++) g2.update(true, 0, rad(2.f), dt);
+        PoseGate::Why w = g2.update(true, 0, rad(30.f), dt); g2.update(true, 0, rad(2.f), dt);
+        check(w != PoseGate::OK && g2.ready, "a single odd frame is skipped, the aim goes on");
+        // The safety check pauses; only many trips in a row with a settled bow give up (round 4 gave up at once).
+        Trips tr; bool gave = false; for (int i = 0; i < 20; i++) gave |= tr.trip(false);
+        check(!gave, "trips while the bow is not settled (animations, target churn) never switch the assist off");
+        Trips tr2; int k = 0; while (!tr2.trip(true) && k < 20) k++;
+        Trips tr3; for (int i = 0; i < 5; i++) tr3.trip(true); tr3.success(); bool g3 = false; for (int i = 0; i < 5; i++) g3 |= tr3.trip(true);
+        check(k == tr2.limit - 1 && !g3, "only 6 failed trips in a row with a settled bow give up; one good aim resets the count");
+        // Pose read faults back off and retry.
+        Backoff bo; double now = 0; bo.fault(now); bool b1 = bo.blocked(now + 0.5) && !bo.blocked(now + 1.1);
+        bo.fault(2); bo.fault(5); bool b2 = bo.blocked(5 + 3.5) && !bo.blocked(5 + 4.1); bo.ok(); bo.fault(20); bool b3 = !bo.blocked(21.1);
+        check(b1 && b2 && b3, "pose faults pause the live pose 1, 2, 4 ... s and then retry; a good read resets it");
+        // The steady offset wraps (0.4.0 logged +360 deg).
+        PoseOffset po; Cam cc; cc.yaw = rad(179.f);
+        for (int i = 0; i < 100; i++) po.update(dir_of(rad(-179.f + (i % 2) * 0.5f), 0), dir_of(rad(179.f), 0), dt, 0.03f);
+        check(std::fabs(deg(po.yaw)) < 5.f, "the bow offset stays near +2 deg across the +-180 deg seam (no +360)");
+        // Look away by hand mid-aim: hands_on() forgets the last pose so the return does not count as a jump.
+        AimCtl c2; for (int i = 0; i < 30; i++) { float ry, rp; c2.pose(true, dir_of(0, rad(2.f)), dir_of(0, 0), dt, ry, rp); }
+        c2.hands_on(); float ry, rp; PoseGate::Why w2 = c2.pose(true, dir_of(rad(40.f), rad(4.f)), dir_of(rad(40.f), 0), dt, ry, rp);
+        check(w2 == PoseGate::OK, "after the player looks away by hand, the aim resumes without a re-settle");
     }
     printf("%s (%d failed)\n", g_fail ? "FAILED" : "ALL PASSED", g_fail);
     return g_fail;

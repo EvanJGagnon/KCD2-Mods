@@ -152,7 +152,14 @@ static float g_maxDist = 80.f, g_headDrop = 0.13f, g_headAbove = 0.08f, g_overri
 static mk::Steer g_steer;
 static mk::Calib g_cal;
 // Live bow pose (round 4): the arrow leaves the bow's "arrow" joint along its -Z axis, at the game's own speed.
-static bool g_live = true; static int g_poseFaults = 0;
+static bool g_live = true; static mk::Backoff g_poseBack;
+// Round 5: steer only on a settled bow pose, on a slowly smoothed offset, with a dead zone and an acceleration
+// limit; checks that trip pause the assist and start over instead of switching it off.
+static mk::AimCtl g_ctl; static mk::Trips g_trips;
+static bool g_gaveUp = false;                                    // steering off for the session (tracking and log go on)
+static double g_pauseUntil = 0; static int g_tickFaults = 0;
+static double g_noPoseT = -1;                                    // since when the pose has not been readable (-1: it is)
+static bool g_waitLogged = false;
 static V3 g_slot; static bool g_haveSlot = false;               // arrow helper offset in the joint frame (learnt from the first arrow)
 static mk::SpeedCheck g_speedChk; static mk::PoseOffset g_off;
 static mk::Flight g_phys; static bool g_physGame = false;        // gravity and air resistance from the arrow's own physics params
@@ -227,10 +234,12 @@ static bool read_pose_raw(mk::LivePose& lp, float* speed) {
 }
 static bool read_pose(mk::LivePose& lp, float* speed) {
     if (!g_live) return false;
-    __try { return read_pose_raw(lp, speed); }
+    double now = now_s(); if (g_poseBack.blocked(now)) return false;
+    __try { bool ok = read_pose_raw(lp, speed); if (ok) g_poseBack.ok(); return ok; }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         lp.ok = false;
-        if (++g_poseFaults >= 10) { g_live = false; logf("bow pose: 10 faults while reading it - aiming with the measured camera offsets from now on"); }
+        if (g_poseBack.fault(now)) { g_live = false; logf("bow pose: %d faults while reading it - aiming with the measured camera offsets from now on", g_poseBack.total); }
+        else logf("bow pose: fault while reading it (%d in a row) - camera offsets for %.0f s, then trying again", g_poseBack.inRow, g_poseBack.until - now);
         return false;
     }
 }
@@ -409,7 +418,8 @@ static mk::Lock::Why pick(const V3& camPos, const V3& camFwd, bool handsOn) {
     return why;
 }
 
-static void reset_aim() { g_off.have = false; g_lock = 0; g_lockState = mk::Lock(); g_lockHasPrev = false; g_haveLast = false; g_errFrames = 0; g_outOfRange = false; }
+static void reset_steer() { g_ctl.reset(); g_errFrames = 0; g_haveLast = false; g_waitLogged = false; g_noPoseT = -1; }
+static void reset_aim() { reset_steer(); g_off.have = false; g_lock = 0; g_lockState = mk::Lock(); g_lockHasPrev = false; g_haveLast = false; g_errFrames = 0; g_outOfRange = false; }
 
 // ---------------- arrows: calibration ----------------
 static void save_calib() {
@@ -566,7 +576,7 @@ static void on_launch(void* self, const float* pos, const float* vel, float scal
         uintptr_t ap = F<uintptr_t>(p, PR_AMMOPARAMS), pp = ap && kc::readable(ap + AP_PARTICLE, 8) ? F<uintptr_t>(ap, AP_PARTICLE) : 0;
         if (pp && kc::readable(pp, PP_GRAVITY + 12)) { s.physK = F<float>(pp, PP_AIRRES); s.physG = rd3(pp + PP_GRAVITY); s.physOk = std::isfinite(s.physK + s.physG.x + s.physG.y + s.physG.z); }
         InterlockedExchange(&g_shotReady, 1);
-    } __except (EXCEPTION_EXECUTE_HANDLER) { logf("exception reading a launched arrow - calibration off"); g_dead = true; }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { InterlockedExchange(&g_shotReady, 0); logf("exception reading a launched arrow - this shot is not measured"); }
 }
 static void LaunchHook(void* self, const float* pos, const float* dir, const float* vel, float scale) {        // CProjectile vtbl[35]
     G.launch(self, pos, dir, vel, scale); on_launch(self, pos, vel, scale);
@@ -580,7 +590,8 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     // The player is moving the mouse: let go (the lock decides whether the target is still wanted).
     float rqx = F<float>(look, L_REQUEST), rqz = F<float>(look, L_REQUEST + 8);
     bool moving = fabsf(rqx) + fabsf(rqz) > 0.0015f;
-    if (moving) { if (now >= g_userUntil) KC_DLOG("player is aiming by hand - letting go"); g_userUntil = now + g_overrideS; g_haveLast = false; g_errFrames = 0; }
+    if (moving) { if (now >= g_userUntil) KC_DLOG("player is aiming by hand - letting go"); g_userUntil = now + g_overrideS; g_haveLast = false; g_errFrames = 0;
+                  g_ctl.hands_on(); }
     bool hands = now < g_userUntil;
     static bool s_hands = false; if (s_hands && !hands) g_acqT = now; s_hands = hands;   // ease back in after the mouse
 
@@ -614,15 +625,35 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     else g_lockVel = V3{};
     g_lockPrev = tp; g_lockHasPrev = true;
 
+    if (g_gaveUp || now < g_pauseUntil) return;
+
     // Where the arrow will start, which way it will go and how fast: the bow's live pose and the game's speed
     // formula when readable (round 4), else the camera plus the offsets measured from earlier arrows.
     mk::LivePose lp; float gameSpeed = 0;
-    bool live = read_pose(lp, &gameSpeed) && (lp.pos - camPos).len() < 3.f;
+    bool got = read_pose(lp, &gameSpeed) && (lp.pos - camPos).len() < 3.f;
+    // Unreadable for a whole second (switched off, faulting, or a weapon without the joint): measured offsets.
+    if (got) g_noPoseT = -1; else if (g_noPoseT < 0) g_noPoseT = now;
+    bool live = got, fallback = !got && (!g_live || g_poseBack.blocked(now) || now - g_noPoseT > 1.0);
+    float rawY = 0, rawP = 0;
+    if (!fallback) {
+        // Round 5: is this a drawn bow?  Not while it is being raised, nocked or blended (no turn at all then).
+        bool was = g_ctl.gate.ready;
+        mk::PoseGate::Why gw = g_ctl.pose(live, lp.dir, camFwd, dt, rawY, rawP);
+        if (live && (gw == mk::PoseGate::OK || gw == mk::PoseGate::SETTLING)) g_off.update(lp.dir, camFwd, dt, 0.03f);
+        if (gw != mk::PoseGate::OK) {
+            if (!g_waitLogged || was) {
+                g_waitLogged = true;
+                logf("not steering: the bow's pose is %s%s (bow vs camera yaw %+.1f pitch %+.1f deg)", mk::gate_why(gw), was ? " - pausing" : "", mk::deg(rawY), mk::deg(rawP));
+            }
+            g_errFrames = 0;
+            return;
+        }
+        if (!was) { logf("bow pose settled after %.2f s - aiming (bow vs camera yaw %+.2f pitch %+.2f deg)", g_ctl.gate.waited, mk::deg(rawY), mk::deg(rawP)); g_waitLogged = false; }
+    }
     V3 origin, launchDir; float speed;
     if (live) {
         origin = mk::launch_point(lp, g_haveSlot ? g_slot : V3{});
-        g_off.update(lp.dir, camFwd, dt, 0.03f);
-        launchDir = lp.dir;
+        launchDir = lp.dir;                                             // honest: the marker and the log use this frame's pose
         speed = gameSpeed > 0 ? gameSpeed * g_speedChk.ratio : g_cal.speed_at((float)(now - g_aimT0));
     } else {
         g_off.have = false;
@@ -630,25 +661,34 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
         launchDir = mk::dir_of(mk::yaw_of(camFwd) + g_cal.yawOff, mk::pitch_of(camFwd) + g_cal.pitchOff);
         speed = g_cal.speed_at((float)(now - g_aimT0));
     }
-    float offY = live ? g_off.yaw : g_cal.yawOff, offP = live ? g_off.pitch : g_cal.pitchOff;
+    // Steering uses the tracked offset: the camera follows the bow's slow sway, not its tremor or each frame's wobble.
+    float offY = live ? g_ctl.off.yaw : g_cal.yawOff, offP = live ? g_ctl.off.pitch : g_cal.pitchOff;
+    float offVY = live ? g_ctl.off.vy : 0.f, offVP = live ? g_ctl.off.vp : 0.f;
     const mk::Flight& fl = flight_use();
     mk::Solution s = mk::solve(origin, tp, g_lead ? g_lockVel : V3{}, speed, fl);
-    if (!s.ok) { if (!g_outOfRange) logf("target out of range for this bow (%.0f m) - not aiming", (tp - origin).len()); g_outOfRange = true; g_haveLast = false; return; }
+    if (!s.ok) { if (!g_outOfRange) logf("target out of range for this bow (%.0f m) - not aiming", (tp - origin).len()); g_outOfRange = true; g_haveLast = false; g_ctl.glide.reset(); return; }
     g_outOfRange = false;
-    // The camera direction that makes the bow point along the wanted launch direction.
-    float wy = mk::yaw_of(s.dir) - offY, wp = mk::pitch_of(s.dir) - offP;
-    float ey = mk::wrap_pi(wy - mk::yaw_of(camFwd)), ep = wp - mk::pitch_of(camFwd);
-    float fy = 0, fp = 0;
-    if (g_haveLast && dt > 0.f) { fy = mk::wrap_pi(wy - g_lastYaw) / dt; fp = (wp - g_lastPitch) / dt; if (fabsf(fy) > 3.f || fabsf(fp) > 3.f) fy = fp = 0; }
-    g_lastYaw = wy; g_lastPitch = wp; g_haveLast = true;
-    // Gentle start: the turn speed builds up over 0.4 s after a target is taken.
-    mk::Steer st = g_steer; st.maxRate *= std::min(1.f, 0.3f + 0.7f * (float)(now - g_acqT) / 0.4f);
-    float dy, dp; st.step(ey, ep, fy, fp, dt, dy, dp);
+    // The camera turn that makes the bow point along the wanted launch direction (smoothed offset, dead zone,
+    // acceleration limit; gentle start: the turn speed builds up over 0.4 s after a target is taken).
+    float dist = (tp - origin).len(), dy = 0, dp = 0, ey, ep;
+    float ramp = std::min(1.f, 0.3f + 0.7f * (float)(now - g_acqT) / 0.4f);
+    ey = mk::wrap_pi(mk::yaw_of(s.dir) - offY - mk::yaw_of(camFwd)); ep = mk::pitch_of(s.dir) - offP - mk::pitch_of(camFwd);
+    float err = sqrtf(ey * ey + ep * ep);
+    auto pause_aim = [&](const char* why) {
+        bool settled = g_ctl.gate.ready && fabsf(offY) < mk::rad(5.f) && fabsf(offP) < mk::rad(5.f);
+        reset_steer(); g_pauseUntil = now + 0.5;
+        if (g_trips.trip(settled)) { g_gaveUp = true; logf("%s - %d times in a row with a settled bow: steering off for this session (restart the game)", why, g_trips.inRow); }
+        else logf("%s - pausing, then aiming again once the bow is settled", why);
+    };
+    // A wanted turn far bigger than the target cone: the pose or the target is not what it seems.
+    if (err > mk::rad(25.f)) { char b[128]; sprintf_s(b, "the wanted turn is %.0f deg (more than the target cone)", mk::deg(err)); pause_aim(b); return; }
+    bool moveCam = g_ctl.turn(s.dir, camFwd, offY, offP, offVY, offVP, dist, ramp, dt, dy, dp, ey, ep);
+    g_lastYaw = mk::yaw_of(s.dir) - offY; g_lastPitch = mk::pitch_of(s.dir) - offP; g_haveLast = true;
 
     // Where would an arrow loosed right now cross the target?  (the bow's pose as it is this frame)
     V3 lead = g_lead ? g_lockVel * s.tof : V3{}, tFut = tp + lead, at;
     float gap = mk::impact_near(origin, launchDir, speed, fl, tFut, at) ? (at - tFut).len() : -1.f;
-    g_aim.target = g_lock; g_aim.point = tp; g_aim.dist = (tp - origin).len(); g_aim.errYaw = ey; g_aim.errPitch = ep; g_aim.speed = speed; g_aim.bone = bone; g_aim.t = now;
+    g_aim.target = g_lock; g_aim.point = tp; g_aim.dist = dist; g_aim.errYaw = ey; g_aim.errPitch = ep; g_aim.speed = speed; g_aim.bone = bone; g_aim.t = now;
     g_aim.gap = gap; g_aim.at = at; g_aim.origin = origin; g_aim.dir = launchDir; g_aim.live = live;
     if (g_marker && gap >= 0 && !InterlockedCompareExchange(&g_markerReady, 0, 0)) {
         // Impact: a cross where this arrow would land - green when within 8 cm of the head BONE, yellow when off,
@@ -663,15 +703,13 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     }
 
     // Safety: the camera must come closer to the aim point while the mod turns it.  If after half a second
-    // of large errors it has not, something in the game is not as expected: stop and say so.
-    float err = sqrtf(ey * ey + ep * ep);
-    if (err > mk::rad(2.f)) {
+    // of large errors it has not, pause and start over (round 4 switched the mod off here for good).
+    if (err > mk::rad(2.f) && now - g_acqT > 0.3) {
         if (!g_errFrames) g_errStart = err;
         if (++g_errFrames > 30 && err > 0.9f * g_errStart) {
-            logf("the camera does not follow the mod's turns (error %.1f -> %.1f deg) - assist disabled for this session", mk::deg(g_errStart), mk::deg(err));
-            g_dead = true; return;
+            char b[128]; sprintf_s(b, "the camera does not follow the mod's turns (error %.1f -> %.1f deg)", mk::deg(g_errStart), mk::deg(err)); pause_aim(b); return;
         }
-    } else g_errFrames = 0;
+    } else { g_errFrames = 0; if (err < mk::rad(0.5f)) g_trips.success(); }
 
     // Add the turn to the game's additive look input.  If our last write has not been used yet (no look
     // tick since), replace it instead of adding twice.
@@ -682,9 +720,9 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
 
     if (kc::g_debug && now - g_logT > 0.5) {
         g_logT = now;
-        logf("aim: target %.1f m (%s), arrow %.1f m/s (%s), bow vs camera yaw %+.2f pitch %+.2f deg, flight %.2f s, lead (%.1f %.1f) m/s, error yaw %+.2f pitch %+.2f deg, turn %+.2f %+.2f deg, predicted impact %.0f cm from the aim point",
+        logf("aim: target %.1f m (%s), arrow %.1f m/s (%s), bow vs camera yaw %+.2f pitch %+.2f deg (steering on %+.2f %+.2f), flight %.2f s, lead (%.1f %.1f) m/s, error yaw %+.2f pitch %+.2f deg, turn %+.2f %+.2f deg%s, predicted impact %.0f cm from the aim point",
              (tp - origin).len(), bone ? "head bone" : animal ? "chest" : "box", speed, live ? (gameSpeed > 0 ? "game formula" : "bow pose, measured speed") : (g_cal.measured() ? "camera + measured" : "GUESS"),
-             mk::deg(offY), mk::deg(offP), s.tof, g_lockVel.x, g_lockVel.y, mk::deg(ey), mk::deg(ep), mk::deg(dy), mk::deg(dp), gap * 100.f);
+             mk::deg(live ? rawY : offY), mk::deg(live ? rawP : offP), mk::deg(offY), mk::deg(offP), s.tof, g_lockVel.x, g_lockVel.y, mk::deg(ey), mk::deg(ep), mk::deg(dy), mk::deg(dp), moveCam ? "" : " (on the head: following the sway only)", gap * 100.f);
     }
 }
 
@@ -724,7 +762,13 @@ static void* SsUpdateHook(void* self, void* a, void* b, void* c) {
     void* r = G.ssUpdate(self, a, b, c);
     if (!g_dead) {
         __try { tick(); }
-        __except (EXCEPTION_EXECUTE_HANDLER) { logf("exception in tick - assist disabled for this session"); g_dead = true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            // A fault in the mod's own reads: start over (the next frame re-reads everything).  Only a fault that
+            // keeps coming back switches the mod off.
+            reset_aim();
+            if (++g_tickFaults >= 20) { logf("exception in tick (%d times) - assist disabled for this session", g_tickFaults); g_dead = true; }
+            else logf("exception in tick (%d) - starting the aim over", g_tickFaults);
+        }
     }
     if (InterlockedCompareExchange(&g_markerReady, 0, 0) && G.ssExec) {
         __try { G.ssExec(self, g_markerLua, strlen(g_markerLua), "AutoMarksman marker", nullptr); } __except (EXCEPTION_EXECUTE_HANDLER) { g_marker = false; }
@@ -836,9 +880,13 @@ static DWORD WINAPI Init(LPVOID) {
     g_policy.animals = kc::ini_int("Options", "TargetAnimals", 1) != 0;
     g_lead = kc::ini_int("Options", "LeadMovingTargets", 1) != 0;
     g_live = kc::ini_int("Options", "BowPose", 1) != 0;
+    g_ctl.st = g_steer;
+    g_ctl.swayTau = std::max(20, std::min(1000, kc::ini_int("Options", "SwaySmoothingMs", 100))) / 1000.f;
+    g_ctl.glide.tol = std::max(0, std::min(20, kc::ini_int("Options", "HoldWithinCm", 2))) / 100.f;
+    g_ctl.gate.settle = std::max(0, std::min(2000, kc::ini_int("Options", "SettleMs", 200))) / 1000.f;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.4.0 (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.5.0 (game ts 0x%08X)", R.im.timestamp);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     G.fwGlobal = f.fwGlobal; G.sysGlobal = f.sysGlobal;
@@ -861,6 +909,8 @@ static DWORD WINAPI Init(LPVOID) {
          g_hostileOnly ? "people only when in combat" : "anyone you aim at", g_headBone ? "head bone" : "head from box");
     logf("targets: people %s, animals %s, horses %s, dogs %s; impact marker %s", g_policy.people ? "yes" : "no", g_policy.animals ? "yes" : "no",
          g_policy.horses ? "yes" : "no", g_policy.dogs ? "yes" : "no", g_marker ? "on" : "off");
+    logf("camera: follows the bow's slow sway (tracking filter %.0f ms, tremor filtered out), does not chase the last %.0f cm, steers only after the bow has been steady for %.0f ms",
+         g_ctl.swayTau * 1000.f, g_ctl.glide.tol * 100.f, g_ctl.gate.settle * 1000.f);
     logf("arrow path: %s", g_live ? "from the bow's live arrow joint and the game's speed formula (BowPose=1)" : "from the camera plus measured offsets (BowPose=0)");
     return 0;
 }

@@ -1,4 +1,4 @@
-THEATRICAL AUTOMARKSMAN 0.4.0 (TEST BUILD) - Kingdom Come: Deliverance II
+THEATRICAL AUTOMARKSMAN 0.5.0 (TEST BUILD) - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 While Henry holds a drawn bow, the camera turns gently onto the head of the person (or the chest of the
@@ -14,6 +14,13 @@ along the bow's axis, which sits a couple of degrees off the view and moves as t
 reads that live bow pose every frame (the same way the game's own trajectory preview does) and the
 arrow speed the game's formula gives for your bow and arrow, and steers until that real path crosses
 the head.
+
+The camera stays calm: it only starts turning once the bow is actually drawn and steady (never while it
+is being raised or the next arrow is nocked), it follows the bow's slow sway but not its tremor, and it
+turns and stops smoothly. The marker is never smoothed: it always shows where an arrow loosed right now
+would really go, so loose when it is green. If something looks wrong (the camera does not follow, the
+bow pose cannot be read for a moment) the assist pauses and picks the aim up again instead of switching
+itself off.
 
 That is all it does. You still draw, hold and release the bow yourself. The game flies the arrow, sways
 the bow with Henry's skill and stamina, and decides whether the arrow hits. Nothing is teleported, no
@@ -54,6 +61,9 @@ SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
             TargetHorses=0, TargetDogs=0   horses and dogs (off: your own are never aimed at)
             ShowImpactMarker=1    draw the predicted impact and the head
             BowPose=1             aim with the bow's live pose (0 = camera plus measured offsets)
+            SwaySmoothingMs=100   how closely the camera follows the bow's slow sway (higher = calmer)
+            HoldWithinCm=2        the camera does not chase the last few centimetres
+            SettleMs=200          steer only after the bow has been drawn and steady this long
             HeadBone=1            aim at the head bone (0 = estimate the head from the body's size)
             HeadAboveBoneCm=8     how far above the head bone to aim (the bone is at the base of the skull)
             HeadDropCm=13         without the bone: aim this far below the top of a person
