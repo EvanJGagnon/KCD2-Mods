@@ -218,9 +218,14 @@ static float g_lastYaw = 0, g_lastPitch = 0; static bool g_haveLast = false;
 static float g_wrX = 0, g_wrZ = 0;                              // what the mod last put into m_lookAngleAccum
 static float g_errStart = 0; static int g_errFrames = 0;        // "does the camera follow?" check
 static const char* volatile g_notice = nullptr;
-// Test-stage UI workaround: SendInfoText on this game build can show raw @ text for unlocalized
-// literals. Keep notices configurable and OFF by default; the log always records F4 state.
-static bool g_notices = false;
+// KCD2 SendInfoText resolves @localization_keys. Plain text produces stray '@' in the HUD.
+// The corresponding keys live in Localization/*_xml.pak (all supported game languages).
+// Notices can still be suppressed by Notices=0, without affecting F4 or targeting.
+static bool g_notices = true;
+static const char* const NOTICE_ON   = "Game.SendInfoText(\"@tam_on\", true)";
+static const char* const NOTICE_OFF  = "Game.SendInfoText(\"@tam_off\", true)";
+static const char* const NOTICE_BOW  = "Game.SendInfoText(\"@tam_bow_measured\", true)";
+static const char* const NOTICE_FIRST= "Game.SendInfoText(\"@tam_first_arrow\", true)";
 // Crossbow diagnostic captures the actual, unmodified firing-pose direction even when
 // nothing is targeted. It does not alter the camera, weapon skeleton or projectile.
 static bool g_crossbowDiag = false;
@@ -646,7 +651,7 @@ static void track_arrows(double now) {
                  g_aim.live ? "from the bow's live pose" : "from the camera and measured offsets");
             g_trackTarget = g_aim.target; g_shotPred.valid = g_aim.gap >= 0; g_shotPred.at = g_aim.at;
         } else logf("   at release: the assist was not aiming (off, hands-on or no target)");
-        if (bowShot && changed && !wasMeasured && g_notices) g_notice = "Game.SendInfoText(\"AutoMarksman: bow measured\", false)";
+        if (bowShot && changed && !wasMeasured && g_notices) g_notice = NOTICE_BOW;
         g_track = mk::ShotTrack(); g_track.p0 = s.p0; g_track.v0 = s.v0; g_trackEnt = s.ent; g_trackT0 = s.t0; g_trackFamily = s.family;
         g_trackMiss = 1e9f; g_trackPrev = s.p0; g_trackHasPrev = true; g_tgtN = 0;
         save_calib();
@@ -925,7 +930,7 @@ static void tick() {
     if (g_key.pressed()) {
         g_on = !g_on; reset_aim(); sway_hook(g_on);
         logf("assist %s", g_on ? "ON" : "OFF");
-        if (g_notices) g_notice = g_on ? "Game.SendInfoText(\"AutoMarksman on\", false)" : "Game.SendInfoText(\"AutoMarksman off\", false)";
+        if (g_notices) g_notice = g_on ? NOTICE_ON : NOTICE_OFF;
     }
     uintptr_t fw = *(uintptr_t*)G.fwGlobal; if (!fw) return;
     uintptr_t pl = (uintptr_t)G.clientActor((void*)fw);
@@ -936,12 +941,14 @@ static void tick() {
         if (!ok) { if (++g_bad >= 3) { g_dead = true; logf("disabled: player data does not look right (game updated?)"); } return; }
         g_checked = pl; uintptr_t e = F<uintptr_t>(pl, A_ENTITY); g_playerId = e ? F<uint32_t>(e, E_ID) : 0;
         logf("player found (entity %u)", g_playerId);
+        // Announce startup state only after a real game player exists (not in the main menu).
+        if (g_notices) g_notice = g_on ? NOTICE_ON : NOTICE_OFF;
     }
     g_player = pl;
     bool aiming = F<uint8_t>(ctrl, MW_AIMING) != 0;
     if (aiming && !g_wasAiming) {
         g_aimT0 = now; reset_aim();
-        if (g_on && g_notices && weapon_family(ctrl) == FAM_BOW && !g_cal.measured() && !g_toldUncal) { g_toldUncal = true; g_notice = "Game.SendInfoText(\"AutoMarksman: your first arrow measures this bow\", false)";
+        if (g_on && g_notices && weapon_family(ctrl) == FAM_BOW && !g_cal.measured() && !g_toldUncal) { g_toldUncal = true; g_notice = NOTICE_FIRST;
             logf("aiming with the first-shot guess (%.0f m/s) - the first arrow will measure the bow", g_cal.speed); }
     }
     if (!aiming && g_wasAiming) g_releaseT = now;
@@ -1109,7 +1116,7 @@ static DWORD WINAPI Init(LPVOID) {
     kc::init(g_self, "kcd2_automarksman");
     QueryPerformanceFrequency(&g_qpf);
     g_key.vk = kc::ini_key("Toggle", VK_F4);
-    g_notices = kc::ini_int("Options", "Notices", 0) != 0;
+    g_notices = kc::ini_int("Options", "Notices", 1) != 0;
     g_crossbowDiag = kc::ini_int("Options", "CrossbowPoseDiagnostics", 0) != 0;
     g_on = kc::ini_int("Options", "StartEnabled", 0) != 0;
     g_policy.cone = mk::rad((float)std::max(2, std::min(30, kc::ini_int("Options", "ConeDegrees", 10))));
@@ -1142,7 +1149,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_ctl.gate.settle = std::max(0, std::min(2000, kc::ini_int("Options", "SettleMs", 200))) / 1000.f;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.6.0 LOCAL DIAGNOSTIC 3 (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.6.0 LOCAL DIAGNOSTIC 4 (localized F4 notices) (game ts 0x%08X)", R.im.timestamp);
     // Other Theatrical mods and Horse Route Follow also install on CScriptSystem::Update.
     // Their init threads are concurrent, so installing immediately after KCSE load may
     // leave our hook underneath a later non-chaining hook. Let other plugins settle first.

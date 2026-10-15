@@ -100,3 +100,5 @@ CREDITS
   JerryYOJ - KCSE, the Address Library, and libKCD2 (GPL-3.0), whose public research notes on the
   player's look angles, bow controller and projectiles this mod builds on.
   inkcrow - Arrow Arc, which inspired the arc-prediction idea (no code was used).
+
+F4 shows a localized ON/OFF popup, with an initial status notice after loading your save.

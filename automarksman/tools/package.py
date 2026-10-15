@@ -29,6 +29,18 @@ if __name__ == '__main__':
     shutil.copy(os.path.join(R, 'kcd2_automarksman.ini'), p)
     shutil.copy(os.path.join(R, 'docs', 'theatrical_automarksman.txt'), os.path.join(d, 'README.txt'))
     shutil.copy(os.path.join(R, '..', 'LICENSE'), os.path.join(d, 'LICENSE.txt'))
+    # KCD2 UI messages must be localization keys, not literal SendInfoText strings.
+    # Mirror the working horse_route_follow Localization/*_xml.pak layout.
+    loc = os.path.join(d, 'Localization'); os.makedirs(loc, exist_ok=True)
+    with open(os.path.join(R, 'localization', 'text_ui_theatrical_automarksman.xml'), encoding='utf-8') as rf:
+        xml = rf.read()
+    assert all(f'<Cell>{key}</Cell>' in xml for key in ('tam_on', 'tam_off', 'tam_bow_measured', 'tam_first_arrow'))
+    languages = ('Chineses', 'Chineset', 'Czech', 'English', 'French', 'German',
+                 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese',
+                 'Russian', 'Spanish', 'Turkish', 'Ukrainian', 'Vietnamese')
+    for lang in languages:
+        with zipfile.ZipFile(os.path.join(loc, f'{lang}_xml.pak'), 'w', zipfile.ZIP_DEFLATED) as pf:
+            pf.writestr('text_ui_theatrical_automarksman.xml', xml.encode('utf-8'))
     z = os.path.join(dist, f'TheatricalAutoMarksman-{VER}-test.zip')
     with zipfile.ZipFile(z, 'w', zipfile.ZIP_DEFLATED) as zf:
         for dp, _, fs in os.walk(d):
