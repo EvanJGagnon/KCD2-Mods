@@ -224,7 +224,7 @@ struct AimCtl {
         }
         fy -= offVY; fp -= offVP;                                    // the bow drifting up turns the camera down
         lastSY = sy; lastSP = sp; haveS = true;
-        Steer s2 = st; s2.maxRate *= rateScale;
+        Steer s2 = st; s2.maxRate *= rateScale; s2.dead = 0;           // Glide's soft dead zone replaces Steer's per-axis one (it chattered)
         float cy = ey, cp = ep; bool outside = glide.shrink(cy, cp, dist);
         s2.step(cy, cp, fy, fp, dt, dy, dp);
         glide.apply(dy, dp, dt);

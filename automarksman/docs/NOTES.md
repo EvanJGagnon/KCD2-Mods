@@ -169,3 +169,27 @@ offsets, moving targets, rate cap, bow sway still causing misses).
   reload, so 0.5.0 steers only while the Main shooting action's sub-action (`[[loadout]+0x50]+0x98`) is
   C_ActorActionShootingAiming (RTTI, optional: without it the pose gate alone decides). Projectile gravity and
   drag are read at each launch and kept per ammo item. Multi-pellet ammo (class 4) has real random spread.
+
+## Round 5 findings (0.6.0)
+
+- Bow good (most shots within 2-16 cm); crossbow "bouncy"; hand cannon stopped aiming at the click. Weapon
+  family was not logged; now each shot says bow / crossbow / hand cannon (C_MissileWeaponPlayerController+0x28,
+  CryString "combat_bow" / "combat_crossbow" / "combat_gun").
+- **Native aim sway is a camera turn** (shared/automarksman-sway-re.md): C_ActorActionShootingAiming vtbl[55]
+  0x289C0D8 returns a look rate s*(cos(pi t)/3, 0, sin(pi t/2)), s from stat 0x45 (AimSpreadMax, skill, fatigue);
+  Main::Update 0x28A12E4 adds dt*rate to the look accumulator (+0x88) every frame, player only. Crossbows and guns
+  enter Aiming at once (peak rate), bows only at full draw. 0.6.0 points that vtable slot at a wrapper that
+  scales the returned rate by SwayStrength (default 25%) only while the assist is on; the original pointer is
+  put back when it is switched off, on unload and if the mod stops. No data or stats are changed.
+- **Hand cannon fuse** (shared/automarksman-firearm-fuse-re.md): the click goes straight to Firing; animation
+  event "ignite" sets +0xB4, "firearrow" sets +0xA4 and calls Fire -> GetLaunchPose -> Launch, ~2.45 s later.
+  The direction is read at "firearrow" and the view is not locked, so 0.6.0 keeps aiming in Firing until +0xA4
+  is set or this shot launches (max 4 s). During the fuse the game drifts the view at the sway rate frozen at
+  the click (Firing+0xA8, also scaled by SwayStrength). Whether the gun joint follows the view during the fuse
+  is animation data: round 5's shot left +1.24 deg above the view, as during aiming, which suggests it does.
+- Crossbows launch ~25 ms into Firing; 0.5.0 stopped at Firing and the joint moved -0.15 deg meanwhile
+  (13-15 cm low at 48-58 m). Now aimed until the launch too.
+- The projectile helper offset differs per weapon (bow 64.5 cm, crossbow 15.2 cm, gun 0): kept per weapon now
+  (one shared value put crossbow shots' start 41 cm off). The calibration file (fallback only) learns from
+  bow shots only.
+- Arrows 37 and 42 left their launch plane mid-flight (deflected 54-116 cm sideways): now reported as brushed/hit.

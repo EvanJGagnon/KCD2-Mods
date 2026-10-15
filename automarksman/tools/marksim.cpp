@@ -602,6 +602,73 @@ int main() {
         printf("     clean flights flagged: %d/50; kinked flight flagged at %.1f m, %.0f cm %s\n", falseHits, a, fabsf(sd) * 100, sd < 0 ? "left" : "right");
         check(falseHits == 0 && hit && a > 9.f && a < 12.f && sd < 0, "clean flights pass, the brushed arrow is reported where it turned");
     }
+    printf("28. round 6: the game's own aim sway turns the view; SwayStrength scales it at the source\n");
+    {
+        // Aiming slot 55: a look RATE s*(cos(pi t)/3 pitch, sin(pi t/2) yaw), t from 1 s (crossbow/gun enter
+        // Aiming at once).  The weapon joint follows the view (2 deg above it).  The mod steers with AimCtl.
+        Flight fl; fl.g = 9.0f; fl.k = 0; TrueArrow w{9.0f, 0.0f};
+        auto run = [&](float k, float s, float dist, bool steer, float& green, float& shake, float& worst) {
+            Cam cam; V3 head{0.5f, dist, 1.75f}; V3 d0 = (head - cam.pos).norm(); cam.yaw = yaw_of(d0); cam.pitch = pitch_of(d0) - rad(2.f);
+            AimCtl ctl; ctl.swayTau = 0.1f; float dt = 1.f / 60.f, prY = 0, prP = 0; double a2 = 0; int n = 0, g = 0; worst = 0;
+            for (float t = 0; t < 8.f; t += dt) {
+                float at = 1.f + t, swy = k * rad(s) * std::sin(PI * at / 2), swp = k * rad(s) * 0.333f * std::cos(PI * at);
+                LivePose lp; lp.dir = dir_of(cam.yaw, cam.pitch + rad(2.f)); V3 side = cross(lp.dir, V3{0, 0, 1}).norm(); lp.up = cross(side, lp.dir).norm(); lp.pos = cam.pos + lp.dir * 0.3f;
+                float ry, rp, dy = 0, dp = 0, ey, ep; PoseGate::Why gw = ctl.pose(true, lp.dir, cam.fwd(), dt, ry, rp);
+                if (steer && gw == PoseGate::OK) { Solution so = solve(lp.pos, head, V3{}, 105.f, fl); ctl.turn(so.dir, cam.fwd(), ctl.off.yaw, ctl.off.pitch, ctl.off.vy, ctl.off.vp, dist, 1.f, dt, dy, dp, ey, ep); }
+                float vy = (dy / dt) + swy, vp = (dp / dt) + swp;
+                cam.yaw += vy * dt; cam.pitch += vp * dt;
+                if (t > 1.5f) {
+                    float ay = (vy - prY) / dt, ap = (vp - prP) / dt; a2 += ay * ay + ap * ap; n++;
+                    LivePose f; f.dir = dir_of(cam.yaw, cam.pitch + rad(2.f)); f.pos = cam.pos + f.dir * 0.3f;
+                    float miss = shoot(w, f.pos, f.dir * 105.f, head, V3{}); g += miss < 0.08f; worst = std::max(worst, miss);
+                }
+                prY = vy; prP = vp;
+            }
+            green = (float)g / n; shake = deg((float)std::sqrt(a2 / n));
+        };
+        float g1, s1, w1, g25, s25, w25, g0, s0, w0, gv, sv, wv;
+        run(1.f, 3.f, 50.f, true, g1, s1, w1); run(0.25f, 3.f, 50.f, true, g25, s25, w25); run(0.f, 3.f, 50.f, true, g0, s0, w0); run(1.f, 3.f, 50.f, false, gv, sv, wv);
+        printf("     crossbow at 50 m, sway 3 deg/s: on the head %.0f%% (vanilla sway) / %.0f%% (25%%) / %.0f%% (0%%) of the time; worst miss %.0f / %.0f / %.0f cm\n",
+               g1 * 100, g25 * 100, g0 * 100, w1 * 100, w25 * 100, w0 * 100);
+        printf("     view shake (RMS acceleration): %.1f / %.1f / %.1f deg/s^2 (vanilla game without the mod: %.1f, worst miss %.0f cm)\n", s1, s25, s0, sv, wv * 100);
+        check(g25 > g1 && w25 < 0.5f * w1, "25% sway: on the head more often, worst miss under half of vanilla");
+        check(g0 > 0.95f && w0 < 0.08f, "no sway: the aim holds on the head");
+        check(s25 < 0.5f * s1, "25% sway: the view shakes less than half as much");
+    }
+    printf("29. round 6: hand cannon fuse: the shot leaves 2.45 s after the click, from the view at that moment\n");
+    {
+        // The click freezes the sway rate into Firing; for 2.45 s the view drifts at that rate, then "firearrow"
+        // reads the joint.  0.5.0 stopped steering at the click; 0.6.0 keeps steering until the launch.
+        Flight fl; fl.g = 9.0f; fl.k = 0; TrueArrow w{9.0f, 0.0f};
+        auto fuse = [&](bool keep, float k, float dist, V3 tvel) {
+            Cam cam; V3 head{0.f, dist, 1.75f}; V3 d0 = (head - cam.pos).norm(); cam.yaw = yaw_of(d0); cam.pitch = pitch_of(d0) - rad(1.2f);
+            AimCtl ctl; float dt = 1.f / 60.f, s = rad(3.f) * k, frozenY = 0, frozenP = 0; bool fired = false;
+            for (float t = 0; t < 4.0f; t += dt) {
+                V3 h = head + tvel * t; float at = 1.f + t;
+                float swy = s * std::sin(PI * at / 2), swp = s * 0.333f * std::cos(PI * at);
+                if (t >= 1.5f && !fired) { fired = true; frozenY = swy; frozenP = swp; }
+                if (fired) { swy = frozenY; swp = frozenP; }
+                if (t >= 1.5f + 2.45f) {
+                    V3 dir = dir_of(cam.yaw, cam.pitch + rad(1.2f)), o = cam.pos + dir * 0.2f;
+                    return shoot(w, o, dir * 134.2f, h, tvel);
+                }
+                LivePose lp; lp.dir = dir_of(cam.yaw, cam.pitch + rad(1.2f)); V3 side = cross(lp.dir, V3{0, 0, 1}).norm(); lp.up = cross(side, lp.dir).norm(); lp.pos = cam.pos + lp.dir * 0.2f;
+                float ry, rp, dy = 0, dp = 0, ey, ep; PoseGate::Why gw = ctl.pose(true, lp.dir, cam.fwd(), dt, ry, rp);
+                if ((!fired || keep) && gw == PoseGate::OK) { Solution so = solve(lp.pos, h, tvel, 134.2f, fl); ctl.turn(so.dir, cam.fwd(), ctl.off.yaw, ctl.off.pitch, ctl.off.vy, ctl.off.vp, dist, 1.f, dt, dy, dp, ey, ep); }
+                cam.yaw += dy + swy * dt; cam.pitch += dp + swp * dt;
+            }
+            return 99.f;
+        };
+        float oldS = 0, newS = 0, oldW = 0, newW = 0, van = 0;
+        for (float dist : {15.f, 30.f}) {
+            oldS = std::max(oldS, fuse(false, 0.25f, dist, V3{})); newS = std::max(newS, fuse(true, 0.25f, dist, V3{}));
+            oldW = std::max(oldW, fuse(false, 0.25f, dist, V3{1.3f, 0, 0})); newW = std::max(newW, fuse(true, 0.25f, dist, V3{1.3f, 0, 0}));
+            van = std::max(van, fuse(true, 1.f, dist, V3{1.3f, 0, 0}));
+        }
+        printf("     worst miss at 15-30 m (sway 25%%): still target %.0f cm (stop at click) vs %.1f cm (aim to launch); walking target %.0f vs %.1f cm; vanilla sway %.1f cm\n",
+               oldS * 100, newS * 100, oldW * 100, newW * 100, van * 100);
+        check(newS < 0.06f && newW < 0.08f && oldW > 1.0f, "keeping the aim until the launch puts the shot on the head; stopping at the click misses by metres");
+    }
     printf("%s (%d failed)\n", g_fail ? "FAILED" : "ALL PASSED", g_fail);
     return g_fail;
 }

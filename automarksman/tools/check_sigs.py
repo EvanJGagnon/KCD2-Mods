@@ -40,6 +40,7 @@ PLAN = {
     'SIG_JOINTNAME':      ('slot', '.?AVCDefaultSkeleton@@', 6, 0x5AF5BC),
     'SIG_COMBATMODE':     ('find', 0x117F1E8),
     'SIG_PREVIEW':        ('find', 0x2896326),
+    'SIG_AIMSWAY':        ('slot', '.?AVC_ActorActionShootingAiming@entitymodule@wh@@', 55, 0x289C0D8),
 }
 RTTI_ONLY = ['.?AVC_Player@entitymodule@wh@@', '.?AVC_MissileWeaponPlayerController@entitymodule@wh@@', '.?AVCArrow@entitymodule@wh@@',
              '.?AVC_Human@entitymodule@wh@@', '.?AVC_NPCActor@entitymodule@wh@@', '.?AVC_Horse@entitymodule@wh@@', '.?AVC_Dog@entitymodule@wh@@', '.?AVC_Animal@entitymodule@wh@@',

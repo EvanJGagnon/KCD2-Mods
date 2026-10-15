@@ -54,6 +54,9 @@ using mk::V3;
 template<class T> static T& F(uintptr_t p, uintptr_t o) { return *(T*)(p + o); }
 
 // ---------------- signatures (build 15693 addresses in comments; struct offsets kept literal) ----------------
+// C_ActorActionShootingAiming vtbl[55] 0x289C0D8 (player only): the game's own aim sway, a look rate
+// amp * (cos(pi t)/3, 0, sin(pi t / 2)) that Main::Update adds to the look input every frame.
+static const char* SIG_AIMSWAY = "48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 83 EC 60 0F 29 78 E8 48 8B E9 48 8B 49 60 4C 8B F2";
 static const char* SIG_SS_UPDATE = "48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 30 48 8B 3D ?? ?? ?? ?? 48 8B F1 33 D2 0F 29 74 24 20";   // CScriptSystem vtbl[1] 0xA26B94
 static const char* SIG_SS_EXEC   = "48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 83 EC 50 48 8B F9 48 89 50 E8"; // CScriptSystem vtbl[6] ExecuteBuffer 0x4D4484
 static const char* SIG_FRAMEWORK_REF = "48 8B 0D ?? ?? ?? ?? 48 8B 01 FF 50 40 84 C0";                       // mov rcx,[CCryAction*] (global 0x549D328)
@@ -112,6 +115,10 @@ static const uintptr_t A_LOADOUT = 0x280, A_SOUL = 0x668, LO_BOW = 0x40, LO_AMMO
 // sub-action at +0x98 (Charging = drawing a bow, InstantCharging = raising a crossbow or gun, Aiming = ready to
 // loose, Firing, Reloading, Unloading, ...).  Bows, crossbows and firearms all use these classes.
 static const uintptr_t SE_MAIN = 0x50, MAIN_SUB = 0x98;
+static const uintptr_t FIRING_FIRED = 0xA4;        // C_ActorActionShootingFiring: 1 once "firearrow" launched the shot
+static const uintptr_t MW_FAMILY = 0x28;           // C_MissileWeaponPlayerController: CryString "combat_bow" / "combat_crossbow" / "combat_gun"
+enum { FAM_UNKNOWN, FAM_BOW, FAM_CROSSBOW, FAM_GUN };
+static const char* const FAM_NAME[4] = {"weapon", "bow", "crossbow", "hand cannon"};
 static const uintptr_t PR_AMMOPARAMS = 0x68, AP_PARTICLE = 0x88, PP_AIRRES = 0x24, PP_GRAVITY = 0x44;   // CProjectile -> ammo params -> pe_params_particle                               // gEnv.pEntitySystem (+0xA0) = &gEnv.pSystem (+0xC0) - 0x20
 
 typedef void* (*SsUpdate_t)(void*, void*, void*, void*);
@@ -170,6 +177,13 @@ static bool g_waitLogged = false;
 // Weapon state (-1 unknown layout, -2 idle/none, else SUB_*), and projectile physics per ammo (arrows, bolts and
 // balls fly differently; the game's own parameters are read at each launch and kept per ammo item).
 static int g_sub = -1, g_subLogged = -3; static bool g_toldNoState = false;
+static uintptr_t g_subPtr = 0; static int g_family = FAM_UNKNOWN, g_familyLogged = -1, g_shotNo = 0;
+// Native sway reduction: the Aiming vtable's sway slot is pointed at SwayHook only while the assist is on;
+// the hook calls the game's own function and scales the look rate it returns (0 = no sway, 1 = vanilla).
+typedef uint8_t* (*AimSway_t)(void* self, uint8_t* out);
+static AimSway_t g_swayOrig = nullptr; static uintptr_t* g_swaySlot = nullptr; static bool g_swayHooked = false;
+static float g_swayStrength[4] = {0.25f, 0.25f, 0.25f, 0.25f};  // per family (SwayStrength, SwayStrengthBow/Crossbow/Gun)
+static volatile float g_swayScale = 1.f; static float g_swayPeakRaw = 0;
 static void* g_curAmmo = nullptr;
 struct PhysEntry { void* ammo; mk::Flight f; };
 static PhysEntry g_physCache[8]; static int g_physN = 0;
@@ -209,10 +223,10 @@ static struct { uint32_t target; V3 point, at, origin, dir; float dist, errYaw, 
 // One arrow in flight (from the launch until it stops or 2 s).
 static volatile LONG g_shotReady = 0;
 static struct { V3 p0, v0, camPos, camFwd; uint32_t ent, owner; double t0; float hold, speedScale, vlen, gameSpeed; char name[48];
-                mk::LivePose fire; float physK; V3 physG; bool physOk; void* ammo; void* weapon; int sub; double firingT0; } g_newShot;
+                mk::LivePose fire; float physK; V3 physG; bool physOk; void* ammo; void* weapon; int sub, family; double firingT0; } g_newShot;
 static struct { bool valid; V3 at; } g_shotPred;                   // predicted impact at release, for the flight check
 static V3 g_tgtP[mk::ShotTrack::N]; static float g_tgtT[mk::ShotTrack::N]; static int g_tgtN = 0;   // the target during the flight
-static mk::ShotTrack g_track; static uint32_t g_trackEnt = 0, g_trackTarget = 0; static double g_trackT0 = 0;
+static mk::ShotTrack g_track; static uint32_t g_trackEnt = 0, g_trackTarget = 0; static double g_trackT0 = 0; static int g_trackFamily = 0;
 static float g_trackMiss = 1e9f; static V3 g_trackPrev; static bool g_trackHasPrev = false;
 
 static V3 rd3(uintptr_t a) { return V3{F<float>(a, 0), F<float>(a, 4), F<float>(a, 8)}; }
@@ -289,12 +303,48 @@ static int weapon_state_raw() {
     uintptr_t exp = (uintptr_t)G.loadout((void*)holder); if (!exp || !kc::is_a(exp, G.vtShootExp) || !kc::readable(exp + SE_MAIN, 8)) return -1;
     uintptr_t m = F<uintptr_t>(exp, SE_MAIN); if (!m) return -2;
     if (!kc::is_a(m, G.vtShootMain) || !kc::readable(m + MAIN_SUB, 8)) return -1;
-    uintptr_t sub = F<uintptr_t>(m, MAIN_SUB); if (!sub) return -2;
+    uintptr_t sub = F<uintptr_t>(m, MAIN_SUB); g_subPtr = sub; if (!sub) return -2;
     uintptr_t vt = 0; if (!kc::readable(sub, 8)) return -1; vt = *(uintptr_t*)sub;
     for (int i = 0; i < SUB_N; i++) if (G.vtSub[i] && vt == G.vtSub[i]) return i;
     return -1;
 }
-static int weapon_state() { __try { return weapon_state_raw(); } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; } }
+static int weapon_state() { g_subPtr = 0; __try { return weapon_state_raw(); } __except (EXCEPTION_EXECUTE_HANDLER) { g_subPtr = 0; return -1; } }
+// Firing and the shot not launched yet (the hand cannon's fuse burns inside Firing until "firearrow").
+// -1 when the flag cannot be read.
+static int firing_unfired() {
+    __try { if (g_sub != SUB_FIRING || !g_subPtr || !kc::readable(g_subPtr + FIRING_FIRED, 1)) return -1; return F<uint8_t>(g_subPtr, FIRING_FIRED) == 0; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+// Bow, crossbow or hand cannon: the name of the action map the game picked for the weapon in hand.
+static int weapon_family(uintptr_t ctrl) {
+    __try {
+        const char* n = F<const char*>(ctrl, MW_FAMILY);
+        if (!n || !kc::readable((uintptr_t)n, 16)) return FAM_UNKNOWN;
+        if (!strncmp(n, "combat_bow", 10)) return FAM_BOW;
+        if (!strncmp(n, "combat_crossbow", 15)) return FAM_CROSSBOW;
+        if (!strncmp(n, "combat_gun", 10)) return FAM_GUN;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return FAM_UNKNOWN;
+}
+
+static uint8_t* SwayHook(void* self, uint8_t* out) {
+    uint8_t* r = g_swayOrig(self, out);
+    __try {
+        if (out && out[0]) {
+            float* v = (float*)(out + 4); float k = g_swayScale;
+            float m = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (m > g_swayPeakRaw) g_swayPeakRaw = m;
+            v[0] *= k; v[1] *= k; v[2] *= k;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return r;
+}
+// Point the sway slot at the hook (on) or back at what was there before (off).  Only our own pointer is ever
+// replaced on the way back, so another mod's hook in the same slot is left alone.
+static void sway_hook(bool on) {
+    if (!g_swaySlot || !g_swayOrig || on == g_swayHooked) return;
+    if (on) { kc::write_ptr((void**)g_swaySlot, (void*)&SwayHook); g_swayHooked = true; }
+    else { if (*g_swaySlot == (uintptr_t)&SwayHook) kc::write_ptr((void**)g_swaySlot, (void*)g_swayOrig); g_swayHooked = false; }
+}
 
 // ---------------- skeleton bones ----------------
 // A joint of an entity's character, as the script bind Entity.GetBonePos does it: CEntity::GetCharacter(slot)
@@ -527,10 +577,10 @@ static void finish_track(float t) {
     }
     float g, k, span = 0, rms = 0;
     if (mk::fit_flight(g_track, g, k, &span, &rms)) {
-        if (!g_physGame) g_cal.on_flight(g, k);
-        logf("arrow flight: %d positions over %.0f m, measured gravity %.2f drag %.4f (fit within %.1f cm); aiming with gravity %.2f drag %.4f (%s)", g_track.n, span, g, k, rms * 100.f,
+        if (!g_physGame && g_trackFamily != FAM_CROSSBOW && g_trackFamily != FAM_GUN) g_cal.on_flight(g, k);
+        logf("flight: %d positions over %.0f m, measured gravity %.2f drag %.4f (fit within %.1f cm); aiming with gravity %.2f drag %.4f (%s)", g_track.n, span, g, k, rms * 100.f,
              flight_use().g, flight_use().k, g_physGame ? "the arrow's physics parameters" : "measured flights");
-    } else logf("arrow flight: %d positions over %.2f s, %.0f m of clean flight - not enough to measure the drop", g_track.n, t, span);
+    } else logf("flight: %d positions over %.2f s, %.0f m of clean flight - not enough to measure the drop", g_track.n, t, span);
     if (g_trackTarget && g_trackMiss < 1e8f) logf("   closest approach to the aim point: %.0f cm", g_trackMiss * 100.f);
     save_calib();
     g_trackEnt = 0; g_trackTarget = 0; g_tgtN = 0;
@@ -541,10 +591,12 @@ static void track_arrows(double now) {
         auto& s = g_newShot;
         if (g_trackEnt) finish_track((float)(now - g_trackT0));
         float predicted = g_aim.live && now - g_aim.t < 1.0 ? g_aim.speed : g_cal.speed_at(s.hold); bool wasMeasured = g_cal.measured();
-        bool changed = g_cal.on_launch(s.p0, s.v0, s.camPos, s.camFwd, s.hold);
+        // The measured fallback (calibration file) is the bow's: crossbow and hand cannon shots do not change it.
+        bool bowShot = s.family == FAM_BOW || s.family == FAM_UNKNOWN;
+        bool changed = bowShot && g_cal.on_launch(s.p0, s.v0, s.camPos, s.camFwd, s.hold);
         float sp = s.v0.len();
-        logf("arrow %d (%s): speed %.1f m/s after %.2f s draw; the game's formula says %.1f m/s for a full draw%s",
-             g_cal.shots, s.name, sp, s.hold, s.gameSpeed, s.gameSpeed > 0 && fabsf(sp / s.gameSpeed - 1.f) > 0.03f ? " - DIFFERENT (early release, or an effect the formula call misses)" : "");
+        logf("shot %d (%s, %s): speed %.1f m/s after %.2f s %s; the game's formula says %.1f m/s for a full draw%s",
+             ++g_shotNo, FAM_NAME[s.family], s.name, sp, s.hold, s.family == FAM_BOW ? "draw" : "aim", s.gameSpeed, s.gameSpeed > 0 && fabsf(sp / s.gameSpeed - 1.f) > 0.03f ? " - DIFFERENT (early release, or an effect the formula call misses)" : "");
         if (s.gameSpeed > 0) { bool used = g_speedChk.add(sp, s.gameSpeed); if (!used) logf("   speed differs by %+.0f%% - not learnt from", 100.f * (sp / s.gameSpeed - 1.f)); }
         logf("   launch vs camera: yaw %+.2f pitch %+.2f deg (the bow's own aim; the camera is not the arrow's path)",
              mk::deg(mk::wrap_pi(mk::yaw_of(s.v0) - mk::yaw_of(s.camFwd))), mk::deg(mk::pitch_of(s.v0) - mk::pitch_of(s.camFwd)));
@@ -581,7 +633,7 @@ static void track_arrows(double now) {
             g_trackTarget = g_aim.target; g_shotPred.valid = g_aim.gap >= 0; g_shotPred.at = g_aim.at;
         } else logf("   at release: the assist was not aiming (off, hands-on or no target)");
         if (changed || !wasMeasured) g_notice = "Game.SendInfoText(\"AutoMarksman: bow measured\", false)";
-        g_track = mk::ShotTrack(); g_track.p0 = s.p0; g_track.v0 = s.v0; g_trackEnt = s.ent; g_trackT0 = s.t0;
+        g_track = mk::ShotTrack(); g_track.p0 = s.p0; g_track.v0 = s.v0; g_trackEnt = s.ent; g_trackT0 = s.t0; g_trackFamily = s.family;
         g_trackMiss = 1e9f; g_trackPrev = s.p0; g_trackHasPrev = true; g_tgtN = 0;
         save_calib();
     }
@@ -624,7 +676,7 @@ static void on_launch(void* self, const float* pos, const float* vel, float scal
         // The bow's pose and the game's speed right now (Launch runs inside the game's Fire, after the pose was
         // taken): the truth to check the prediction against, and the arrow helper's offset.
         s.fire.ok = false; s.gameSpeed = 0; read_pose(s.fire, &s.gameSpeed); s.ammo = g_curAmmo; s.weapon = g_curWeapon;
-        s.sub = g_sub; s.firingT0 = g_firingT0; g_lastLaunchT = t;
+        s.sub = g_sub; s.family = g_family; s.firingT0 = g_firingT0; g_lastLaunchT = t;
         // The arrow's physics parameters (ammo params -> particle params: air resistance, gravity vector).
         s.physOk = false;
         uintptr_t ap = F<uintptr_t>(p, PR_AMMOPARAMS), pp = ap && kc::readable(ap + AP_PARTICLE, 8) ? F<uintptr_t>(ap, AP_PARTICLE) : 0;
@@ -697,7 +749,8 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     // flag stays set through a crossbow or gun reload.)
     // Firing: keep aiming until this shot's projectile is out (a launch up to 0.15 s before Firing began is the
     // bow's, which launches first), at most 4 s.  The game decides whether the weapon still follows the view.
-    bool waitingForLaunch = g_sub == SUB_FIRING && g_lastLaunchT < g_firingT0 - 0.15 && now - g_firingT0 < 4.0;
+    int unfired = firing_unfired();
+    bool waitingForLaunch = g_sub == SUB_FIRING && unfired != 0 && g_lastLaunchT < g_firingT0 - 0.15 && now - g_firingT0 < 4.0;
     if (g_sub != -1 && g_sub != SUB_AIMING && !waitingForLaunch) { reset_steer(); return; }
 
     // Where the arrow will start, which way it will go and how fast: the bow's live pose and the game's speed
@@ -803,7 +856,7 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
 static void tick() {
     double now = now_s(); float dt = g_lastT > 0 ? (float)std::min(0.1, now - g_lastT) : 0.f; g_lastT = now;
     if (g_key.pressed()) {
-        g_on = !g_on; reset_aim();
+        g_on = !g_on; reset_aim(); sway_hook(g_on);
         logf("assist %s", g_on ? "ON" : "OFF");
         g_notice = g_on ? "Game.SendInfoText(\"AutoMarksman on\", false)" : "Game.SendInfoText(\"AutoMarksman off\", false)";
     }
@@ -825,10 +878,24 @@ static void tick() {
             logf("aiming with the first-shot guess (%.0f m/s) - the first arrow will measure the bow", g_cal.speed); }
     }
     if (!aiming && g_wasAiming) g_releaseT = now;
-    g_wasAiming = aiming;
+    bool wasAiming = g_wasAiming; g_wasAiming = aiming;
     V3 camPos, camFwd; if (!camera(camPos, camFwd)) return;
     track_arrows(now);
-    if (aiming) update_weapon(now); else { g_sub = -2; g_subLogged = -2; }
+    if (aiming) {
+        update_weapon(now);
+        int fam = weapon_family(ctrl);
+        if (fam != g_familyLogged) {
+            g_familyLogged = fam;
+            if (fam != FAM_UNKNOWN) logf("weapon: %s", FAM_NAME[fam]);
+            if (g_swaySlot && fam != FAM_UNKNOWN) logf("   native sway: %.0f%% of the game's (SwayStrength%s)", g_swayStrength[fam] * 100.f,
+                                                       fam == FAM_BOW ? "Bow" : fam == FAM_CROSSBOW ? "Crossbow" : "Gun");
+        }
+        g_family = fam; g_swayScale = g_swayStrength[fam];
+    } else {
+        if (wasAiming && g_swayPeakRaw > 0 && g_swayHooked)
+            KC_DLOG("native sway this aim: peak %.1f deg/s from the game, %.1f deg/s after SwayStrength", mk::deg(g_swayPeakRaw), mk::deg(g_swayPeakRaw * g_swayScale));
+        g_swayPeakRaw = 0; g_sub = -2; g_subLogged = -2;
+    }
     if (!g_on || !aiming) { if (g_lock) reset_aim(); return; }
     steer(now, dt, look, camPos, camFwd);
 }
@@ -841,7 +908,7 @@ static void* SsUpdateHook(void* self, void* a, void* b, void* c) {
             // A fault in the mod's own reads: start over (the next frame re-reads everything).  Only a fault that
             // keeps coming back switches the mod off.
             reset_aim();
-            if (++g_tickFaults >= 20) { logf("exception in tick (%d times) - assist disabled for this session", g_tickFaults); g_dead = true; }
+            if (++g_tickFaults >= 20) { logf("exception in tick (%d times) - assist disabled for this session", g_tickFaults); g_dead = true; sway_hook(false); }
             else logf("exception in tick (%d) - starting the aim over", g_tickFaults);
         }
     }
@@ -897,6 +964,13 @@ static bool resolve(kc::Resolver& R, Found& f) {
             ".?AVC_ActorActionShootingTransitioningToIdle@entitymodule@wh@@", ".?AVC_ActorActionShootingBase@entitymodule@wh@@"};
         for (int i = 0; i < SUB_N; i++) G.vtSub[i] = R.vtable(SUB_NAME[i], subCls[i], 0);
         if (R.fails != f0) { logf("  (weapon state classes missing: optional, steering uses the bow pose check alone)"); G.vtShootExp = 0; }
+        R.fails = f0;
+        // Native sway (optional too): the Aiming vtable's slot 55.
+        if (G.vtSub[SUB_AIMING]) {
+            uintptr_t* slot = &((uintptr_t*)G.vtSub[SUB_AIMING])[55];
+            if (R.verify("Aiming sway rate (vtbl[55])", *slot, SIG_AIMSWAY)) { g_swaySlot = slot; g_swayOrig = (AimSway_t)*slot; }
+            else logf("  (native sway reduction unavailable: SwayStrength is ignored)");
+        }
         R.fails = f0;
     }
     G.vtProjectile = R.vtable("CProjectile", ".?AVCProjectile@entitymodule@wh@@", 0);
@@ -967,13 +1041,19 @@ static DWORD WINAPI Init(LPVOID) {
     g_policy.animals = kc::ini_int("Options", "TargetAnimals", 1) != 0;
     g_lead = kc::ini_int("Options", "LeadMovingTargets", 1) != 0;
     g_live = kc::ini_int("Options", "BowPose", 1) != 0;
+    {   // Native sway while the assist is on: % of the game's own (100 = vanilla, 0 = none).
+        int all = std::max(0, std::min(100, kc::ini_int("Options", "SwayStrength", 25)));
+        static const char* const key[4] = {nullptr, "SwayStrengthBow", "SwayStrengthCrossbow", "SwayStrengthGun"};
+        g_swayStrength[0] = all / 100.f;
+        for (int i = 1; i < 4; i++) { int v = kc::ini_int("Options", key[i], -1); g_swayStrength[i] = (v < 0 ? all : std::min(100, v)) / 100.f; }
+    }
     g_ctl.st = g_steer;
     g_ctl.swayTau = std::max(20, std::min(1000, kc::ini_int("Options", "SwaySmoothingMs", 100))) / 1000.f;
     g_ctl.glide.tol = std::max(0, std::min(20, kc::ini_int("Options", "HoldWithinCm", 2))) / 100.f;
     g_ctl.gate.settle = std::max(0, std::min(2000, kc::ini_int("Options", "SettleMs", 200))) / 1000.f;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.5.0 (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.6.0 (game ts 0x%08X)", R.im.timestamp);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     G.fwGlobal = f.fwGlobal; G.sysGlobal = f.sysGlobal;
@@ -996,10 +1076,16 @@ static DWORD WINAPI Init(LPVOID) {
          g_hostileOnly ? "people only when in combat" : "anyone you aim at", g_headBone ? "head bone" : "head from box");
     logf("targets: people %s, animals %s, horses %s, dogs %s; impact marker %s", g_policy.people ? "yes" : "no", g_policy.animals ? "yes" : "no",
          g_policy.horses ? "yes" : "no", g_policy.dogs ? "yes" : "no", g_marker ? "on" : "off");
+    logf("native aim sway while the assist is on: bow %.0f%%, crossbow %.0f%%, hand cannon %.0f%% of the game's%s", g_swayStrength[1] * 100.f, g_swayStrength[2] * 100.f,
+         g_swayStrength[3] * 100.f, g_swaySlot ? "" : " (NOT available on this game version)");
     logf("camera: follows the bow's slow sway (tracking filter %.0f ms, tremor filtered out), does not chase the last %.0f cm, steers only after the bow has been steady for %.0f ms",
          g_ctl.swayTau * 1000.f, g_ctl.glide.tol * 100.f, g_ctl.gate.settle * 1000.f);
     logf("arrow path: %s", g_live ? "from the bow's live arrow joint and the game's speed formula (BowPose=1)" : "from the camera plus measured offsets (BowPose=0)");
     return 0;
 }
 KC_PLUGIN("Theatrical AutoMarksman", KC_AUTHOR, 10)
-BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID) { if (r == DLL_PROCESS_ATTACH) { DisableThreadLibraryCalls(h); g_self = h; KC_START(Init); } return TRUE; }
+BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID) {
+    if (r == DLL_PROCESS_ATTACH) { DisableThreadLibraryCalls(h); g_self = h; KC_START(Init); }
+    else if (r == DLL_PROCESS_DETACH) sway_hook(false);           // the game's sway as it was
+    return TRUE;
+}

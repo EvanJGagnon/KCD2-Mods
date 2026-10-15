@@ -1,4 +1,4 @@
-THEATRICAL AUTOMARKSMAN 0.5.0 (TEST BUILD) - Kingdom Come: Deliverance II
+THEATRICAL AUTOMARKSMAN 0.6.0 (TEST BUILD) - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 While Henry holds a drawn bow, the camera turns gently onto the head of the person (or the chest of the
@@ -21,6 +21,10 @@ turns and stops smoothly. The marker is never smoothed: it always shows where an
 would really go, so loose when it is green. If something looks wrong (the camera does not follow, the
 bow pose cannot be read for a moment) the assist pauses and picks the aim up again instead of switching
 itself off.
+
+While the assist is on, the game's own aim sway (it slowly turns the view while you aim) is reduced to
+SwayStrength percent of normal (25 by default, 0 = none, 100 = the game's own); switching the assist
+off gives the game's sway back at once. A hand cannon is aimed through its fuse until the ball leaves.
 
 Crossbows and firearms (hand cannons) go through the same game code as bows: the mod reads their live
 launch pose, the game's speed formula and the projectile's own gravity and drag the same way, and only
@@ -66,6 +70,8 @@ SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
             TargetHorses=0, TargetDogs=0   horses and dogs (off: your own are never aimed at)
             ShowImpactMarker=1    draw the predicted impact and the head
             BowPose=1             aim with the bow's live pose (0 = camera plus measured offsets)
+            SwayStrength=25       the game's own aim sway while the assist is on, % (0 = none, 100 = vanilla)
+            SwayStrengthBow=-1, SwayStrengthCrossbow=-1, SwayStrengthGun=-1   per weapon (-1 = SwayStrength)
             SwaySmoothingMs=100   how closely the camera follows the bow's slow sway (higher = calmer)
             HoldWithinCm=2        the camera does not chase the last few centimetres
             SettleMs=200          steer only after the bow has been drawn and steady this long
