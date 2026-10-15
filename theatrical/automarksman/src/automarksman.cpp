@@ -196,9 +196,9 @@ static uintptr_t g_subPtr = 0; static int g_family = FAM_UNKNOWN, g_familyLogged
 // the hook calls the game's own function and scales the look rate it returns (0 = no sway, 1 = vanilla).
 typedef uint8_t* (*AimSway_t)(void* self, uint8_t* out);
 static AimSway_t g_swayOrig = nullptr; static uintptr_t* g_swaySlot = nullptr; static bool g_swayHooked = false;
-// Which weapon families the assist steers for (Bows / Crossbows / HandCannons), all on by default: with a family
-// off, the camera and the game's sway are left exactly as vanilla.
-static bool g_famOn[4] = {true, true, true, true};
+// Which weapon families the assist steers for (Bows / Crossbows / HandCannons).  Crossbows are experimental and
+// off in the stable release: with a family off, the camera and the game's sway are left exactly as vanilla.
+static bool g_famOn[4] = {true, true, false, true};
 static float g_swayStrength[4] = {0.25f, 0.25f, 0.25f, 0.25f};  // per family (SwayStrength, SwayStrengthBow/Crossbow/Gun)
 static volatile float g_swayScale = 1.f; static float g_swayPeakRaw = 0;
 static void* g_curAmmo = nullptr;
@@ -1208,7 +1208,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_notices = kc::ini_int("Options", "Notices", 1) != 0;
     g_crossbowDiag = kc::ini_int("Options", "CrossbowPoseDiagnostics", 0) != 0;
     g_famOn[FAM_BOW] = kc::ini_int("Options", "Bows", 1) != 0;
-    g_famOn[FAM_CROSSBOW] = kc::ini_int("Options", "Crossbows", 1) != 0;
+    g_famOn[FAM_CROSSBOW] = kc::ini_int("Options", "Crossbows", 0) != 0;      // experimental
     g_famOn[FAM_GUN] = kc::ini_int("Options", "HandCannons", 1) != 0;
     g_on = kc::ini_int("Options", "StartEnabled", 0) != 0;
     g_policy.cone = mk::rad((float)std::max(2, std::min(30, kc::ini_int("Options", "ConeDegrees", 10))));
@@ -1293,7 +1293,7 @@ static DWORD WINAPI Init(LPVOID) {
     logf("ready: %s switches the assist %s (now %s); cone %.0f deg, range %.0f m, turn speed %.0f deg/s, first-shot arrow speed %.0f m/s; %s, %s",
          kc::key_name(g_key.vk, kn, sizeof kn), "on/off", g_on ? "ON" : "OFF", mk::deg(g_policy.cone), g_maxDist, mk::deg(g_steer.maxRate), g_cal.speed,
          g_hostileOnly ? "people only when in combat" : "anyone you aim at", g_headBone ? "head bone" : "head from box");
-    logf("weapons: bows %s, crossbows %s, hand cannons %s; in-game notices %s; crossbow pose diagnostics %s",
+    logf("weapons: bows %s, crossbows %s (experimental), hand cannons %s; in-game notices %s; crossbow pose diagnostics %s",
          g_famOn[FAM_BOW] ? "on" : "off", g_famOn[FAM_CROSSBOW] ? "on" : "off", g_famOn[FAM_GUN] ? "on" : "off",
          g_notices ? "on" : "off", g_crossbowDiag ? "on" : "off");
     logf("visibility: %s, physics ray = %s, solid props/terrain/rigid blockers; max 8 candidates per choice",

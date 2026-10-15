@@ -27,7 +27,7 @@ def automarksman_text():
     assert {k for k, _ in rows} >= {'tam_on', 'tam_off', 'tam_bow_measured', 'tam_first_arrow'}, rows
     return rows
 
-AM_DESC = ("While a bow or a hand cannon is aimed, the camera steadily turns onto the head of the target nearest the centre "
+AM_DESC = ("While a bow, crossbow or hand cannon is aimed, the camera steadily turns onto the head of the target nearest the centre "
            "of the view, allowing for drop and movement (F4). You still draw and release.")
 
 # key = (.ini section, setting) holding the mod's hotkey; checked for conflicts across all archives
