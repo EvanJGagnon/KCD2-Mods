@@ -1,0 +1,76 @@
+THEATRICAL AUTOPICKPOCKET 0.2.1 (test build) - Kingdom Come: Deliverance II
+by Flubbermunchkin
+
+Henry pickpockets for you, the way a careful thief would, with the game's own controls. You still sneak
+up, start the pickpocket and hold the key. The mod then does the two things you would do with your
+fingers: it lets go of the key when the safety ring says it is time, and it plays the item grid (turning
+the selector, uncovering, taking and leaving through the exit before time runs out).
+
+Nothing is forced. The victim's alertness, your skill, the selector speed, the time every item costs and
+the detection roll are all the game's. A bad roll still gets Henry caught, and running out of time away
+from the exit still gets him caught. Items only move when the game itself closes the grid, so stolen
+goods, crime and reputation all work as normal.
+
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
+
+INSTALL
+  Manual: copy the "theatrical_autopickpocket" folder from this archive into <game>\Mods\
+          (you should end up with <game>\Mods\theatrical_autopickpocket\KCSE\Plugins\kcd2_autopickpocket.dll).
+  Uninstall: delete that folder.
+
+HOW TO USE
+  1. Press [ (left square bracket) to switch the mod on (it starts off; a short message confirms it).
+  2. Sneak up behind someone and start pickpocketing as usual. Hold the key.
+  3. The mod lets go of the key for you once the ring falls to the safety you chose (ReleaseSafety).
+     Letting go yourself earlier works as always.
+  4. In the item grid, keep your hands off the grid keys. The mod plans the whole round at once: the most
+     valuable set of items it has time for (all of them when they fit), in the shortest sweep around the
+     ring, uncovering covered ones when there is time, then leaves through the exit with time to spare.
+  [ again switches it off. Switching off during the grid hands the grid straight back to you.
+
+SETTINGS  (Mods\theatrical_autopickpocket\KCSE\Plugins\kcd2_autopickpocket.ini)
+  [Keys]    Toggle=[             on/off key (F1-F12, a letter or digit, or a symbol key such as ])
+  [Options] Enabled=0            1 = on when the game starts
+            Charge=1             1 = let go of the pickpocket key for you
+            Grid=1               1 = play the item grid for you
+            ReleaseSafety=0.35   ring value at which the key is released (1 = full green, 0.05 = almost red).
+                                 Higher is safer but gives less time in the grid.
+            MaxChargeSeconds=0   0 = no limit; otherwise also let go after this many seconds of charge
+            SafetyMs=1500        time (ms) always kept in hand beyond the way back to the exit
+            MinValue=0           leave items worth less than this
+            Uncover=1            1 = look under covered items when there is time
+            Notices=1            1 = short on-screen message when the key switches it
+            DebugLog=0           1 = detailed log for bug reports
+
+KNOWN ISSUES AND LIMITATIONS
+  - Test build: only checked against the Steam version of the game (build 15693).
+  - The mod decides only on what you could see: it does not know what is under a covered item until it
+    uncovers it.
+  - Pressing the grid keys yourself while the mod plays the grid confuses it. Press [ first.
+
+GAME UPDATES
+  The mod does not use fixed memory addresses. At startup it finds the game code it needs by pattern and
+  checks it. If a game update changes that code, the mod turns itself off and changes nothing. The log
+  then says "this game version is not supported yet".
+
+BUG REPORTS
+  Please include kcd2_autopickpocket.log (next to the DLL, rewritten every session).
+
+CREDITS
+  - Warhorse Studios, whose minigame this is.
+  - JerryYOJ for KCSE, the Address Library and libKCD2 (GPL v3), whose C_Pickpocketing field names were
+    the starting point for this mod's research.
+
+LICENSE
+  GNU GPL v3 (LICENSE.txt).
+
+CHANGES
+  0.2.1  - The on/off message shows real text instead of "@tap_on". Log lines list the planned route
+           with spaces. No change to how the mod plays.
+  0.2.0  - Plans the whole route through the grid (no more back-and-forth), takes every item that fits.
+         - Default key is now [ (F5 is a common quicksave key). Symbol keys such as [ ] ; work in the ini.
+  0.1.0  - First test build.
