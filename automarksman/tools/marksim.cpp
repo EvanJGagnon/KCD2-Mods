@@ -587,6 +587,21 @@ int main() {
         c2.hands_on(); float ry, rp; PoseGate::Why w2 = c2.pose(true, dir_of(rad(40.f), rad(4.f)), dir_of(rad(40.f), 0), dt, ry, rp);
         check(w2 == PoseGate::OK, "after the player looks away by hand, the aim resumes without a re-settle");
     }
+    printf("27. round 6: a projectile that brushes something is recognised (round 5 arrows 37 and 42)\n");
+    {
+        TrueArrow w{9.0f, 0.0f}; int falseHits = 0;
+        for (int i = 0; i < 50; i++) {      // clean flights, 60 Hz samples, any direction
+            float y = rnd(-3.f, 3.f), p = rnd(-0.1f, 0.2f); V3 v = dir_of(y, p) * rnd(70.f, 135.f);
+            ShotTrack tr; tr.p0 = V3{0, 0, 1.6f}; tr.v0 = v; shoot(w, tr.p0, v, V3{0, 1000, 0}, V3{}, &tr);
+            float a, sd; falseHits += deflection(tr, a, sd);
+        }
+        // Arrow 37: 17.5 m, ended 112 cm left: turned sideways after brushing something at ~9 m.
+        ShotTrack tr; tr.p0 = V3{0, 0, 1.6f}; tr.v0 = V3{0, 76.2f, 0.5f};
+        for (int i = 0; i < 40; i++) { float t = i / 60.f; float yy = 76.2f * t; float x = yy > 9.f ? -(yy - 9.f) * 0.13f : 0.f; tr.add(t, V3{x, yy, 1.6f + 0.5f * t - 4.5f * t * t}); }
+        float a = 0, sd = 0; bool hit = deflection(tr, a, sd);
+        printf("     clean flights flagged: %d/50; kinked flight flagged at %.1f m, %.0f cm %s\n", falseHits, a, fabsf(sd) * 100, sd < 0 ? "left" : "right");
+        check(falseHits == 0 && hit && a > 9.f && a < 12.f && sd < 0, "clean flights pass, the brushed arrow is reported where it turned");
+    }
     printf("%s (%d failed)\n", g_fail ? "FAILED" : "ALL PASSED", g_fail);
     return g_fail;
 }

@@ -62,6 +62,18 @@ inline void miss_parts(const V3& head, const V3& arrow, const V3& target, float&
 }
 inline V3 heading(const V3& v) { V3 h{v.x, v.y, 0}; float l = h.len(); return l > 1e-6f ? h * (1.f / l) : V3{0, 1, 0}; }
 
+// A flying projectile stays in the vertical plane of its launch (no wind in the game).  The first sample that
+// leaves that plane by more than 15 cm (+1% of the distance) is where it brushed or hit something; round 5
+// arrows 37 and 42 passed 54-116 cm to the side of a prediction that matched their launch exactly.
+inline bool deflection(const ShotTrack& s, float& atDist, float& side) {
+    V3 h = heading(s.v0), r{h.y, -h.x, 0};
+    for (int i = 0; i < s.n; i++) {
+        V3 d = s.p[i] - s.p0; float x = d.x * h.x + d.y * h.y, y = d.x * r.x + d.y * r.y;
+        if (std::fabs(y) > 0.15f + 0.01f * std::max(0.f, x)) { atDist = x; side = y; return true; }
+    }
+    return false;
+}
+
 // The game's speed formula is called live; what is learnt from real arrows is only how far reality is from it
 // (an effect the formula call does not see).  Shots that differ a lot are reported, not learnt from.
 struct SpeedCheck {

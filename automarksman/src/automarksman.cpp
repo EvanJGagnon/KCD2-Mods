@@ -173,7 +173,20 @@ static int g_sub = -1, g_subLogged = -3; static bool g_toldNoState = false;
 static void* g_curAmmo = nullptr;
 struct PhysEntry { void* ammo; mk::Flight f; };
 static PhysEntry g_physCache[8]; static int g_physN = 0;
-static V3 g_slot; static bool g_haveSlot = false;               // arrow helper offset in the joint frame (learnt from the first arrow)
+// Projectile helper offset in the joint frame, per weapon (bow 64.5 cm, crossbow 15 cm, hand cannon 0 in round 5:
+// one shared value put the start point up to 50 cm off after a weapon change).
+struct SlotEntry { void* weapon; V3 slot; };
+static SlotEntry g_slots[8]; static int g_slotN = 0;
+static void* g_curWeapon = nullptr;
+static const V3* slot_for(void* w) { for (int i = 0; i < g_slotN; i++) if (g_slots[i].weapon == w) return &g_slots[i].slot; return nullptr; }
+static void slot_store(void* w, const V3& sl) {
+    if (!w) return;
+    for (int i = 0; i < g_slotN; i++) if (g_slots[i].weapon == w) { g_slots[i].slot = g_slots[i].slot + (sl - g_slots[i].slot) * 0.5f; return; }
+    int i = g_slotN < 8 ? g_slotN++ : 7; g_slots[i].weapon = w; g_slots[i].slot = sl;
+}
+// Firing phase: the shot is not out yet until the projectile launches (a hand cannon burns its fuse for ~2.5 s
+// after the click; a crossbow launches ~25 ms into Firing).  The aim is kept until then.
+static double g_firingT0 = -10, g_lastLaunchT = -10;
 static mk::SpeedCheck g_speedChk; static mk::PoseOffset g_off;
 static mk::Flight g_phys; static bool g_physGame = false;        // gravity and air resistance from the arrow's own physics params
 
@@ -196,7 +209,7 @@ static struct { uint32_t target; V3 point, at, origin, dir; float dist, errYaw, 
 // One arrow in flight (from the launch until it stops or 2 s).
 static volatile LONG g_shotReady = 0;
 static struct { V3 p0, v0, camPos, camFwd; uint32_t ent, owner; double t0; float hold, speedScale, vlen, gameSpeed; char name[48];
-                mk::LivePose fire; float physK; V3 physG; bool physOk; void* ammo; } g_newShot;
+                mk::LivePose fire; float physK; V3 physG; bool physOk; void* ammo; void* weapon; int sub; double firingT0; } g_newShot;
 static struct { bool valid; V3 at; } g_shotPred;                   // predicted impact at release, for the flight check
 static V3 g_tgtP[mk::ShotTrack::N]; static float g_tgtT[mk::ShotTrack::N]; static int g_tgtN = 0;   // the target during the flight
 static mk::ShotTrack g_track; static uint32_t g_trackEnt = 0, g_trackTarget = 0; static double g_trackT0 = 0;
@@ -231,7 +244,7 @@ static bool read_pose_raw(mk::LivePose& lp, float* speed) {
     uintptr_t holder = F<uintptr_t>(g_player, A_LOADOUT); if (!holder || !kc::readable(holder, 8) || !in_image(*(uintptr_t*)holder)) return false;
     uintptr_t lo = (uintptr_t)G.loadout((void*)holder); if (!lo || !kc::readable(lo + LO_BOW, 16)) return false;
     void* bow = F<void*>(lo, LO_BOW); void* ammo = F<void*>(lo, LO_AMMO); if (!bow) return false;
-    g_curAmmo = ammo;
+    g_curAmmo = ammo; g_curWeapon = bow;
     void* sys = G.wsys();
     float out[9] = {0};
     G.launchPose(sys, out, (void*)g_player, bow);
@@ -489,6 +502,10 @@ static bool target_point(uint32_t id, V3& p) {
 // mod predicted at release (signed, in cm: up/right as seen from the bow).  This is the check that does not
 // depend on the mod's own model.
 static void finish_track(float t) {
+    float dfAt = 0, dfSide = 0;
+    if (mk::deflection(g_track, dfAt, dfSide))
+        logf("   the projectile had left its flight line by %.1f m (%.0f cm to the %s): it brushed or hit something there - the miss below is not the aim's",
+             dfAt, fabsf(dfSide) * 100.f, dfSide >= 0 ? "right" : "left");
     if (g_trackTarget && g_tgtN > 0) {
         V3 h = mk::heading(g_track.v0), at; float tc = 0;
         // the target where it was when the arrow got there (it may walk)
@@ -534,7 +551,7 @@ static void track_arrows(double now) {
         if (s.fire.ok) {
             // The arrow helper's offset: joint minus launch point, in the joint frame (constant per arrow model).
             V3 sl = mk::slot_learn(s.fire.dir, s.fire.up, s.fire.pos - s.p0);
-            if (sl.len() < 1.5f) { g_slot = g_haveSlot ? g_slot + (sl - g_slot) * 0.5f : sl; g_haveSlot = true; }
+            if (sl.len() < 1.5f) slot_store(s.weapon, sl);
             float da = mk::angle_between(s.v0, s.fire.dir);
             logf("   bow pose at the shot: arrow leaves %.1f cm from the bow's arrow joint, %.2f deg off its axis (arrow helper offset %.1f %.1f %.1f cm)",
                  (s.fire.pos - s.p0).len() * 100.f, mk::deg(da), sl.x * 100.f, sl.y * 100.f, sl.z * 100.f);
@@ -606,7 +623,8 @@ static void on_launch(void* self, const float* pos, const float* vel, float scal
         s.t0 = t; s.hold = g_wasAiming ? (float)(t - g_aimT0) : (t - g_releaseT < 0.3 ? (float)(g_releaseT - g_aimT0) : 0.f);
         // The bow's pose and the game's speed right now (Launch runs inside the game's Fire, after the pose was
         // taken): the truth to check the prediction against, and the arrow helper's offset.
-        s.fire.ok = false; s.gameSpeed = 0; read_pose(s.fire, &s.gameSpeed); s.ammo = g_curAmmo;
+        s.fire.ok = false; s.gameSpeed = 0; read_pose(s.fire, &s.gameSpeed); s.ammo = g_curAmmo; s.weapon = g_curWeapon;
+        s.sub = g_sub; s.firingT0 = g_firingT0; g_lastLaunchT = t;
         // The arrow's physics parameters (ammo params -> particle params: air resistance, gravity vector).
         s.physOk = false;
         uintptr_t ap = F<uintptr_t>(p, PR_AMMOPARAMS), pp = ap && kc::readable(ap + AP_PARTICLE, 8) ? F<uintptr_t>(ap, AP_PARTICLE) : 0;
@@ -619,6 +637,17 @@ static void LaunchHook(void* self, const float* pos, const float* dir, const flo
 }
 static void LaunchHookArrow(void* self, const float* pos, const float* dir, const float* vel, float scale) {   // CArrow vtbl[35]
     G.launchArrow(self, pos, dir, vel, scale); on_launch(self, pos, vel, scale);
+}
+
+// The weapon's shooting state, every frame while the bow/crossbow/gun is up.
+static void update_weapon(double now) {
+    g_sub = weapon_state();
+    if (g_sub != g_subLogged) {
+        if (g_sub == SUB_FIRING) g_firingT0 = now;
+        if (g_sub >= 0 || g_sub == -2) KC_DLOG("weapon: %s", g_sub >= 0 ? SUB_NAME[g_sub] : "no shooting action");
+        else if (!g_toldNoState) { g_toldNoState = true; logf("weapon state: not readable here - steering on the bow pose check alone"); }
+        g_subLogged = g_sub;
+    }
 }
 
 // ---------------- steering ----------------
@@ -663,16 +692,13 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
 
     if (g_gaveUp || now < g_pauseUntil) return;
 
-    // Weapon state (bows, crossbows, firearms alike): steer only while the game's shooting action is in Aiming.
-    // Drawing a bow, raising a crossbow or gun, firing and reloading are never steered on.  (The controller's
-    // aiming flag stays set through a crossbow or gun reload.)
-    g_sub = weapon_state();
-    if (g_sub != g_subLogged) {
-        if (g_sub >= 0 || g_sub == -2) KC_DLOG("weapon: %s", g_sub >= 0 ? SUB_NAME[g_sub] : "no shooting action");
-        else if (!g_toldNoState) { g_toldNoState = true; logf("weapon state: not readable here - steering on the bow pose check alone"); }
-        g_subLogged = g_sub;
-    }
-    if (g_sub != -1 && g_sub != SUB_AIMING) { reset_steer(); return; }
+    // Weapon state (update_weapon(), every frame): steer only while the game's shooting action is in Aiming.
+    // Drawing a bow, raising a crossbow or gun and reloading are never steered on.  (The controller's aiming
+    // flag stays set through a crossbow or gun reload.)
+    // Firing: keep aiming until this shot's projectile is out (a launch up to 0.15 s before Firing began is the
+    // bow's, which launches first), at most 4 s.  The game decides whether the weapon still follows the view.
+    bool waitingForLaunch = g_sub == SUB_FIRING && g_lastLaunchT < g_firingT0 - 0.15 && now - g_firingT0 < 4.0;
+    if (g_sub != -1 && g_sub != SUB_AIMING && !waitingForLaunch) { reset_steer(); return; }
 
     // Where the arrow will start, which way it will go and how fast: the bow's live pose and the game's speed
     // formula when readable (round 4), else the camera plus the offsets measured from earlier arrows.
@@ -699,7 +725,8 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     }
     V3 origin, launchDir; float speed;
     if (live) {
-        origin = mk::launch_point(lp, g_haveSlot ? g_slot : V3{});
+        const V3* sl = slot_for(g_curWeapon);
+        origin = mk::launch_point(lp, sl ? *sl : V3{});
         launchDir = lp.dir;                                             // honest: the marker and the log use this frame's pose
         speed = gameSpeed > 0 ? gameSpeed * g_speedChk.ratio : g_cal.speed_at((float)(now - g_aimT0));
     } else {
@@ -765,10 +792,10 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     else { ax += dp; az += dy; }
     g_wrX = ax; g_wrZ = az;
 
-    if (kc::g_debug && now - g_logT > 0.5) {
+    if (kc::g_debug && now - g_logT > (waitingForLaunch ? 0.1 : 0.5)) {
         g_logT = now;
-        logf("aim: target %.1f m (%s), arrow %.1f m/s (%s), bow vs camera yaw %+.2f pitch %+.2f deg (steering on %+.2f %+.2f), flight %.2f s, lead (%.1f %.1f) m/s, error yaw %+.2f pitch %+.2f deg, turn %+.2f %+.2f deg%s, predicted impact %.0f cm from the aim point",
-             (tp - origin).len(), bone ? "head bone" : animal ? "chest" : "box", speed, live ? (gameSpeed > 0 ? "game formula" : "bow pose, measured speed") : (g_cal.measured() ? "camera + measured" : "GUESS"),
+        logf("aim%s: target %.1f m (%s), arrow %.1f m/s (%s), bow vs camera yaw %+.2f pitch %+.2f deg (steering on %+.2f %+.2f), flight %.2f s, lead (%.1f %.1f) m/s, error yaw %+.2f pitch %+.2f deg, turn %+.2f %+.2f deg%s, predicted impact %.0f cm from the aim point",
+             waitingForLaunch ? " (fired, waiting for the launch)" : "", (tp - origin).len(), bone ? "head bone" : animal ? "chest" : "box", speed, live ? (gameSpeed > 0 ? "game formula" : "bow pose, measured speed") : (g_cal.measured() ? "camera + measured" : "GUESS"),
              mk::deg(live ? rawY : offY), mk::deg(live ? rawP : offP), mk::deg(offY), mk::deg(offP), s.tof, g_lockVel.x, g_lockVel.y, mk::deg(ey), mk::deg(ep), mk::deg(dy), mk::deg(dp), moveCam ? "" : " (on the head: following the sway only)", gap * 100.f);
     }
 }
@@ -801,6 +828,7 @@ static void tick() {
     g_wasAiming = aiming;
     V3 camPos, camFwd; if (!camera(camPos, camFwd)) return;
     track_arrows(now);
+    if (aiming) update_weapon(now); else { g_sub = -2; g_subLogged = -2; }
     if (!g_on || !aiming) { if (g_lock) reset_aim(); return; }
     steer(now, dt, look, camPos, camFwd);
 }
