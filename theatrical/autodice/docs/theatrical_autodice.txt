@@ -1,0 +1,60 @@
+THEATRICAL AUTODICE 0.1.1 - Kingdom Come: Deliverance II
+by Flubbermunchkin
+
+Henry plays his own turns at the dice table while you watch. After every throw he looks the dice
+over, sets aside the ones worth keeping one at a time, and then either throws the rest again or
+passes - with the same game actions you use (hold, score and throw again, pass).
+The game throws the dice, with each die's own weights, scores them, calls busts and pays out; the
+mod never changes the dice, the scores or the money. Henry can lose.
+
+How he decides: for each throw the mod weighs every way of setting dice aside against what the
+dice he would throw next are likely to roll (it knows the side weights of Henry's own dice, so a
+lucky die is worth keeping in play), how far he is from the target score, and how close the
+opponent is to winning. Far ahead he plays it safe; when the opponent is about to win he presses on.
+
+This is an early test version. It has not been played in the game yet.
+
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
+
+INSTALL
+  Vortex: install as usual.
+  Manual: copy the "theatrical_autodice" folder from this archive into <game>\Mods\
+          (you should end up with <game>\Mods\theatrical_autodice\KCSE\Plugins\kcd2_autodice.dll).
+  Uninstall: delete that folder.
+
+HOW TO USE
+  1. Sit down to a game of dice as usual (choose your dice and badges, place the bet).
+  2. Press F3. From then on Henry plays each of his turns himself.
+     Press F3 again at any time to stop and play by hand.
+  3. Badges are left to you: use one by hand whenever you like; Henry carries on afterwards.
+
+SETTINGS  (Mods\theatrical_autodice\KCSE\Plugins\kcd2_autodice.ini)
+  [Keys]    Play=F3            start/stop key (F1-F12, a letter or digit, or a symbol key such as ])
+  [Options] SpeedPercent=100   how fast Henry plays (50 = slow and deliberate, 200 = brisk)
+            RiskPercent=100    above 100 he presses on more, below 100 he banks sooner
+            DebugLog=1         1 = detailed log for bug reports
+
+KNOWN ISSUES AND LIMITATIONS
+  - Only built for the Steam version of the game (1.5.x, build 15693).
+  - The mod counts points by the standard rules; badges that change scoring are scored by the game
+    itself (the log notes the difference), but Henry's plan does not take them into account.
+
+GAME UPDATES
+  The mod does not use fixed memory addresses. At startup it finds the game code it needs by
+  pattern and by class name. If a game update changes that code, the mod turns itself off and
+  changes nothing. The log then says "disabled: this game version is not supported yet".
+
+BUG REPORTS
+  Please include kcd2_autodice.log (next to the DLL, rewritten every session).
+
+CREDITS
+  - JerryYOJ for KCSE, the Address Library and libKCD2 (GPL-3.0), whose public class layouts of the
+    dice game states helped find the game's dice code.
+  - Warhorse Studios - Kingdom Come: Deliverance II.
+
+LICENSE
+  GNU GPL v3 (LICENSE.txt).
