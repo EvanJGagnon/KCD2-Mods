@@ -1,4 +1,4 @@
-THEATRICAL AUTODICE 0.1.1 - Kingdom Come: Deliverance II
+THEATRICAL AUTODICE 1.0.0 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 Henry plays his own turns at the dice table while you watch. After every throw he looks the dice
@@ -11,8 +11,6 @@ How he decides: for each throw the mod weighs every way of setting dice aside ag
 dice he would throw next are likely to roll (it knows the side weights of Henry's own dice, so a
 lucky die is worth keeping in play), how far he is from the target score, and how close the
 opponent is to winning. Far ahead he plays it safe; when the opponent is about to win he presses on.
-
-This is an early test version. It has not been played in the game yet.
 
 REQUIREMENTS
   - Kingdom Come Script Extender (KCSE) by JerryYOJ
@@ -36,7 +34,7 @@ SETTINGS  (Mods\theatrical_autodice\KCSE\Plugins\kcd2_autodice.ini)
   [Keys]    Play=F3            start/stop key (F1-F12, a letter or digit, or a symbol key such as ])
   [Options] SpeedPercent=100   how fast Henry plays (50 = slow and deliberate, 200 = brisk)
             RiskPercent=100    above 100 he presses on more, below 100 he banks sooner
-            DebugLog=1         1 = detailed log for bug reports
+            DebugLog=0         1 = detailed log for bug reports
 
 KNOWN ISSUES AND LIMITATIONS
   - Only built for the Steam version of the game (1.5.x, build 15693).
@@ -49,7 +47,7 @@ GAME UPDATES
   changes nothing. The log then says "disabled: this game version is not supported yet".
 
 BUG REPORTS
-  Please include kcd2_autodice.log (next to the DLL, rewritten every session).
+  Please include kcd2_autodice.log (next to the DLL, rewritten every session), with DebugLog=1.
 
 CREDITS
   - JerryYOJ for KCSE, the Address Library and libKCD2 (GPL-3.0), whose public class layouts of the
@@ -58,3 +56,8 @@ CREDITS
 
 LICENSE
   GNU GPL v3 (LICENSE.txt).
+
+CHANGES
+  1.0.0  - First release (the 0.1.1 test build, unchanged in play). DebugLog is off by default.
+  0.1.1  - Dice set aside earlier in the turn stay out of play. The start/stop key is F3.
+  0.1.0  - First test build.

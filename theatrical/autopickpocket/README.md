@@ -1,17 +1,16 @@
-# Theatrical AutoPickpocket (in development)
+# Theatrical AutoPickpocket
 
 KCSE plugin for Kingdom Come: Deliverance II. Henry pickpockets with the game's own controls: the mod
 releases the charge key when the safety ring reaches a chosen value, then plays the item grid through the
 same UI calls the grid keys make. Detection rolls, timers, item time costs and failure are all the game's.
 Details and addresses: [NOTES.md](NOTES.md).
 
-Isolated from the published mods in this repository: its own copy of `kcd2_common.h`, build and
-packaging. It changes no file outside `theatrical/autopickpocket/` (plus its own CI workflow).
+Self-contained: its own copy of `kcd2_common.h` (an older one: symbol keys are parsed by this copy) and its
+own `build.bat`. The release archive is made by the repository's `tools\package.py`.
 
 ```bat
 set KC_AUTHOR=Flubbermunchkin
 build.bat
-python tools\package.py            :: dist\TheatricalAutoPickpocket-0.2.1.zip
 out\dev\selftest.exe "<game>\Bin\Win64MasterMasterSteamPGO\WHGame.dll" out\dev\kcd2_autopickpocket.dll 2eb3b34 203dee0 566bcc 2bb9dac 2bb9e50 2bba2d4 2bbac78 2b8d3f4 3f74dd8 3c33898 3eebcd0
 python tools\check_sigs.py "<game>\Bin\Win64MasterMasterSteamPGO\WHGame.dll"
 out\dev\ppsim.exe 2000 1            :: offline grid simulator; exit code 1 if any run got caught

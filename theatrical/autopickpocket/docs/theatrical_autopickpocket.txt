@@ -1,4 +1,4 @@
-THEATRICAL AUTOPICKPOCKET 0.2.1 (test build) - Kingdom Come: Deliverance II
+THEATRICAL AUTOPICKPOCKET 1.0.0 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 Henry pickpockets for you, the way a careful thief would, with the game's own controls. You still sneak
@@ -18,6 +18,7 @@ REQUIREMENTS
       https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
 
 INSTALL
+  Vortex: install as usual.
   Manual: copy the "theatrical_autopickpocket" folder from this archive into <game>\Mods\
           (you should end up with <game>\Mods\theatrical_autopickpocket\KCSE\Plugins\kcd2_autopickpocket.dll).
   Uninstall: delete that folder.
@@ -47,7 +48,7 @@ SETTINGS  (Mods\theatrical_autopickpocket\KCSE\Plugins\kcd2_autopickpocket.ini)
             DebugLog=0           1 = detailed log for bug reports
 
 KNOWN ISSUES AND LIMITATIONS
-  - Test build: only checked against the Steam version of the game (build 15693).
+  - Only checked against the Steam version of the game (1.5.x, build 15693).
   - The mod decides only on what you could see: it does not know what is under a covered item until it
     uncovers it.
   - Pressing the grid keys yourself while the mod plays the grid confuses it. Press [ first.
@@ -69,6 +70,7 @@ LICENSE
   GNU GPL v3 (LICENSE.txt).
 
 CHANGES
+  1.0.0  - First release (the 0.2.1 test build, unchanged in play).
   0.2.1  - The on/off message shows real text instead of "@tap_on". Log lines list the planned route
            with spaces. No change to how the mod plays.
   0.2.0  - Plans the whole route through the grid (no more back-and-forth), takes every item that fits.

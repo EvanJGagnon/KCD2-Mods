@@ -1,4 +1,4 @@
-THEATRICAL AUTOFOLLOW 0.2.1 (test build) - Kingdom Come: Deliverance II
+THEATRICAL AUTOFOLLOW 1.0.0 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 Henry can follow anyone. Normally the game only offers "Follow" for certain NPCs - the ones it marks
@@ -18,6 +18,7 @@ REQUIREMENTS
       https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
 
 INSTALL
+  Vortex: install as usual.
   Manual: copy the "theatrical_autofollow" folder from this archive into <game>\Mods\
           (you should end up with <game>\Mods\theatrical_autofollow\KCSE\Plugins\kcd2_autofollow.dll).
   Uninstall: delete that folder.
@@ -37,7 +38,7 @@ SETTINGS  (Mods\theatrical_autofollow\KCSE\Plugins\kcd2_autofollow.ini)
             DebugLog=0      1 = detailed log for bug reports
 
 KNOWN ISSUES AND LIMITATIONS
-  - Test build: only checked against the Steam version of the game (build 15693).
+  - Only checked against the Steam version of the game (1.5.x, build 15693).
 
 GAME UPDATES
   The mod does not use fixed memory addresses. At startup it finds the game's "followable" check by
@@ -55,6 +56,7 @@ LICENSE
   GNU GPL v3 (LICENSE.txt).
 
 CHANGES
+  1.0.0  - First release (the 0.2.1 test build, unchanged in play).
   0.2.1  - The on/off message shows plain text (it showed "@taf_on" / "@taf_off" before).
   0.2.0  - Following now really works: the game's "followable" check itself treats everyone as
            followable (the developer switch alone turned out to do nothing in the release game).

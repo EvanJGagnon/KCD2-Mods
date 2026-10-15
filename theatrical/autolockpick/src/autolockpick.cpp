@@ -169,7 +169,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_hand.p.maxTries = std::max(1, std::min(50, kc::ini_int("Options", "MaxTries", 6)));
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.1.0 (game ts 0x%08X)", R.im.timestamp);
+    logf("start v1.0.0 (game ts 0x%08X)", R.im.timestamp);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pCursor = (Handler_t)f.cursor; pTurn = (Handler_t)f.turn; pOrigUpdate = (Update_t)f.update;

@@ -227,7 +227,7 @@ static DWORD WINAPI Init(LPVOID){
     bool useCvar=kc::ini_int("Options","SetCvar",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("{\"ev\":\"abort\",\"msg\":\"WHGame.dll not loaded\"}"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("{\"ev\":\"start\",\"version\":\"0.2.1\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
+    logf("{\"ev\":\"start\",\"version\":\"1.0.0\",\"game_ts\":\"0x%08X\"}",R.im.timestamp);
     FoundF ff{};
     if(!resolve_followable(R,ff)){ logf("{\"ev\":\"disabled\",\"msg\":\"this game version is not supported yet - nothing was changed\"}"); return 0; }
     g_patch=(volatile uint16_t*)ff.patch;

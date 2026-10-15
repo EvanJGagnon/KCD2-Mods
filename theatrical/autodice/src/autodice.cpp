@@ -323,7 +323,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_risk = std::min(2.0, std::max(0.5, kc::ini_int("Options", "RiskPercent", 100) / 100.0));
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); g_base = R.im.base;
-    logf("start v0.1.1 (game ts 0x%08X)", R.im.timestamp);
+    logf("start v1.0.0 (game ts 0x%08X)", R.im.timestamp);
     Found f{};
     if (!resolve(R, f)) { logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pScore = (Action_t)f.score; pPass = (Action_t)f.pass; pHoldDie = (HoldDie_t)f.holddie; pEval = (Eval_t)f.eval;

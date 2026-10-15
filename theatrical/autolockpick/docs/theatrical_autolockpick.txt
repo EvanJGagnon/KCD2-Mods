@@ -1,26 +1,54 @@
-Theatrical AutoLockpick 0.1.0 (test build)
-==========================================
+THEATRICAL AUTOLOCKPICK 1.0.0 - Kingdom Come: Deliverance II
+by Flubbermunchkin
 
 Henry picks the lock himself. Start picking a lock, press F2, and his hand moves the pick onto the pin,
 waits until it sits, holds the turn key and follows the pin round as the lock turns, through the game's
 own pick and turn controls. Press F2 again at any time to take over.
 
 What stays real:
-- The game adds Henry's tremble (his Thievery skill, and mods such as half hand shaking) to every move.
-- The game decides whether the pick sits on the pin, wears the pick while it is off the pin, and breaks it.
-- Locks beyond Henry's skill stay hard: he lets go when the pick slips (the lock springs back, as when you
-  let go of the key) and tries again, up to MaxTries times, then hands the lock back to you.
-- After a pick breaks he stops; press F2 again to go on with the next pick.
+  - The game adds Henry's tremble (his Thievery skill, and mods such as half hand shaking) to every move.
+  - The game decides whether the pick sits on the pin, wears the pick while it is off the pin, and breaks it.
+  - Locks beyond Henry's skill stay hard: he lets go when the pick slips (the lock springs back, as when you
+    let go of the key) and tries again, up to MaxTries times, then hands the lock back to you.
+  - After a pick breaks he stops; press F2 again to go on with the next pick.
 Nothing is written to the lock, the picks, the inventory or the skill.
 
-Requires: Kingdom Come: Deliverance II (Steam build 15693 tested), KCSE.
-Install: put the theatrical_autolockpick folder in <game>\Mods.
+REQUIREMENTS
+  - Kingdom Come Script Extender (KCSE) by JerryYOJ
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332
+  - Address Library For KCSE by JerryYOJ (required by KCSE itself)
+      https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381
 
-Settings (KCSE\Plugins\kcd2_autolockpick.ini):
-  [Keys]    Pick=F2          start / stop
+INSTALL
+  Vortex: install as usual.
+  Manual: copy the "theatrical_autolockpick" folder from this archive into <game>\Mods\
+          (you should end up with <game>\Mods\theatrical_autolockpick\KCSE\Plugins\kcd2_autolockpick.dll).
+  Uninstall: delete that folder.
+
+SETTINGS  (Mods\theatrical_autolockpick\KCSE\Plugins\kcd2_autolockpick.ini)
+  [Keys]    Pick=F2          start / stop (F1-F12, a letter or digit, or a symbol key such as ])
   [Options] AutoStart=0      1 = start by itself on every lock (never right after a pick breaks)
             MaxTries=6       tries per lock before handing it back
-            DebugLog=1       detailed log in kcd2_autolockpick.log (for bug reports)
+            DebugLog=0       1 = detailed log in kcd2_autolockpick.log (for bug reports)
 
-If the game is updated and the mod no longer recognises it, it does nothing and says so in its log.
-License: GNU GPL v3. The lock's layout follows libKCD2 by JerryYOJ (GPL v3).
+KNOWN ISSUES AND LIMITATIONS
+  - Only checked against the Steam version of the game (1.5.x, build 15693).
+
+GAME UPDATES
+  The mod does not use fixed memory addresses. At startup it finds the game code it needs by pattern
+  and by class name. If a game update changes that code, the mod turns itself off and changes nothing.
+  The log then says "disabled: this game version is not supported yet".
+
+BUG REPORTS
+  Please include kcd2_autolockpick.log (next to the DLL, rewritten every session), with DebugLog=1.
+
+CREDITS
+  - JerryYOJ for KCSE, the Address Library and libKCD2 (GPL-3.0); the lock's layout follows libKCD2.
+  - Warhorse Studios - Kingdom Come: Deliverance II.
+
+LICENSE
+  GNU GPL v3 (LICENSE.txt).
+
+CHANGES
+  1.0.0  - First release (the 0.1.0 test build, unchanged in play). DebugLog is off by default.
+  0.1.0  - First test build.
