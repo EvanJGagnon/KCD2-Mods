@@ -117,11 +117,11 @@ struct RunStats { float onsetMove = 0, rmsRate = 0, rmsAcc = 0, maxRate = 0, hit
 // steady aim (rate, and acceleration = shake), and over the steady part: how often an arrow loosed at that
 // frame lands within 8 cm of the head (round 4 log: the game launches 2-3 ms after the mod's last aimed frame,
 // from the same pose), and how far the honest marker is from where it lands.
-static RunStats aim_run(const SwayBow& bow, V3 head, bool old, float T, float swayTau = 0.1f, Cam* camOut = nullptr) {
+static RunStats aim_run(const SwayBow& bow, V3 head, bool old, float T, float swayTau = 0.1f, Cam* camOut = nullptr, float swayRateGain=1.f) {
     TrueArrow w{9.0f, 0.0f}; Flight fl; fl.g = 9.0f; fl.k = 0; V3 slot{0.0f, -0.62f, 0.01f};
     Cam cam; { V3 o = cam.pos; V3 d = (head - o).norm(); cam.yaw = yaw_of(d) + rad(1.5f); cam.pitch = pitch_of(d) - rad(1.0f); }
     float dt = 1.f / 60.f; RunStats r; float y0 = cam.yaw, p0 = cam.pitch;
-    AimCtl ctl; ctl.swayTau = swayTau; ctl.glide.tol = g_tol; PoseOffset off; Steer st; float lastY = 0, lastP = 0; bool first = true;
+    AimCtl ctl; ctl.swayTau = swayTau; ctl.swayRateGain=swayRateGain; ctl.glide.tol = g_tol; PoseOffset off; Steer st; float lastY = 0, lastP = 0; bool first = true;
     double sumR2 = 0, sumA2 = 0; float prevRy = 0, prevRp = 0; int nR = 0, hits = 0, nShots = 0; double sumMiss = 0; float settledAt = -1;
     for (float t = 0; t < T; t += dt) {
         LivePose lp = bow.pose(cam, t); V3 o = launch_point(lp, slot);
@@ -749,6 +749,37 @@ int main() {
               "roof clipping elevated ballistic arc prevents shooting lock");
         Solution invalid{};check(!projectile_path_clear(from,invalid,70.f,f,clear),
               "unreachable target is not treated as a clear path");
+    }
+    printf("33. crossbow: reduced pose-rate feedback calms camera without losing calibrated hits\n");
+    {
+        SwayBow b; b.onset=0.45f; b.onsetP=-40.f; b.swayP=0.6f; b.swayY=0.3f;
+        V3 target{0.f,22.f,1.75f};
+        RunStats full=aim_run(b,target,false,6.f,0.1f,nullptr,1.f);
+        RunStats smooth=aim_run(b,target,false,6.f,0.1f,nullptr,0.4f);
+        printf("     full 100%%: shake %.1f deg/s2, hits %.1f%%, miss %.1f cm\n",
+               full.rmsAcc,100.f*full.hitFrac,100.f*full.meanMiss);
+        printf("     crossbow 40%%: shake %.1f deg/s2, hits %.1f%%, miss %.1f cm\n",
+               smooth.rmsAcc,100.f*smooth.hitFrac,100.f*smooth.meanMiss);
+        check(smooth.rmsAcc < full.rmsAcc * 0.90f &&
+              smooth.hitFrac >= 0.75f && smooth.meanMiss < 0.09f,
+              "crossbow camera shake reduced while retaining >=75% simulated head hits");
+    }
+    printf("34. crossbow: sticky lock cannot jump between nearby NPCs without mouse input\n");
+    {
+        TargetPolicy p; p.sticky=true; Lock st; st.id=101;
+        Cand both[]={{101,rad(4.f),15.f,K_PERSON},{102,rad(0.3f),18.f,K_PERSON}};
+        check(st.update(both,2,p,false)==Lock::KEPT && st.id==101,
+              "even much more central NPC cannot steal locked crossbow target");
+        st.update(both,2,p,true);
+        check(st.update(both,2,p,false)==Lock::SWITCHED && st.id==102,
+              "manual mouse motion permits the new better-centred selection");
+        st.id=101; st.userMoved=false;
+        Cand onlyVisible[]={{102,rad(0.3f),18.f,K_PERSON}};
+        check(st.update(onlyVisible,1,p,false)==Lock::SWITCHED && st.id==102,
+              "unobstructed NPC replaces old target if old one moves behind cover");
+        TargetPolicy gun; gun.sticky=false; st.id=101; st.userMoved=false;
+        check(st.update(both,2,gun,false)==Lock::SWITCHED && st.id==102,
+              "existing gun and bow non-sticky selection behavior unchanged");
     }
     printf("%s (%d failed)\n", g_fail ? "FAILED" : "ALL PASSED", g_fail);
     return g_fail;

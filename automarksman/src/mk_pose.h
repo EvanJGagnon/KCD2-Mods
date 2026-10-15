@@ -198,6 +198,7 @@ struct SwayTrack {
 struct AimCtl {
     PoseGate gate; SwayTrack off; Glide glide; Steer st;
     float swayTau = 0.12f;       // s: 1/bandwidth of the sway tracker (larger = calmer camera, follows sway less)
+    float swayRateGain = 1.f;    // crossbow-only <1 reduces positive feedback from delayed weapon pose
     float ffY = 0, ffP = 0, lastSY = 0, lastSP = 0; bool haveS = false;
     void reset() { gate.reset(); off.reset(); glide.reset(); ffY = ffP = 0; haveS = false; }
     void hands_on() { gate.havePrev = false; glide.reset(); haveS = false; }
@@ -222,7 +223,7 @@ struct AimCtl {
             if (std::fabs(vy) > 3.f || std::fabs(vp) > 3.f) vy = vp = 0;
             float k = std::min(1.f, dt / 0.1f); ffY += (vy - ffY) * k; ffP += (vp - ffP) * k; fy = ffY; fp = ffP;
         }
-        fy -= offVY; fp -= offVP;                                    // the bow drifting up turns the camera down
+        fy -= offVY * swayRateGain; fp -= offVP * swayRateGain;     // attenuate IK rate feedback for crossbow
         lastSY = sy; lastSP = sp; haveS = true;
         Steer s2 = st; s2.maxRate *= rateScale; s2.dead = 0;           // Glide's soft dead zone replaces Steer's per-axis one (it chattered)
         float cy = ey, cp = ep; bool outside = glide.shrink(cy, cp, dist);

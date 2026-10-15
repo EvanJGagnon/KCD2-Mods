@@ -23,6 +23,7 @@ struct TargetPolicy {
     float cone = rad(10.f);       // a target is taken only this close to the centre of the view
     float keep = 1.3f;            // ...and kept while the mod steers if it stays within keep * cone
     bool people = true, animals = true, horses = false, dogs = false;
+    bool sticky = false;             // crossbow: never switch a valid lock unless player moves the mouse
     float animalPenalty = 1.6f;   // an animal must be this much closer to the centre than a person to win
     float distWeight = 0.0005f;   // rad per metre: a nearer target wins a tie
     bool allowed(int kind) const {
@@ -67,6 +68,7 @@ struct Lock {
         }
         bool fresh = userMoved; userMoved = false;
         if (!fresh && cur && p.allowed(cur->kind) && cur->ang <= p.keep * p.cone) {
+            if (p.sticky) return KEPT; // do not yank the crossbow camera to a different NPC
             // Keep the current target unless another one is clearly nearer the centre of the view.
             if (!best || best->id == id || p.score(*best) > 0.5f * p.score(*cur)) return KEPT;
             id = best->id; return SWITCHED;

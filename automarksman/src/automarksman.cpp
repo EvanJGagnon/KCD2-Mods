@@ -173,6 +173,7 @@ static const char* const SUB_NAME[SUB_N] = {"drawing", "raising the weapon", "ai
 static kc::Hotkey g_key;
 static bool g_on = false, g_dead = false, g_lead = true, g_hostileOnly = false, g_headBone = true, g_remember = true, g_marker = true;
 static bool g_losEnabled = true, g_losFaulted = false; static double g_losLogT = -100;
+static float g_crossbowRateGain = 0.4f;
 static mk::TargetPolicy g_policy; static mk::Lock g_lockState;
 static float g_maxDist = 80.f, g_headDrop = 0.13f, g_headAbove = 0.08f, g_overrideS = 0.4f;
 static mk::Steer g_steer;
@@ -1034,6 +1035,11 @@ static void tick() {
                                                        fam == FAM_BOW ? "Bow" : fam == FAM_CROSSBOW ? "Crossbow" : "Gun");
         }
         g_family = fam; g_swayScale = g_swayStrength[fam];
+        // Other weapons keep their proven tracking. The crossbow's slow IK
+        // drives a corrective feedback loop when its pose velocity is fed
+        // straight back into look input each frame.
+        g_ctl.swayRateGain = fam == FAM_CROSSBOW ? g_crossbowRateGain : 1.f;
+        g_policy.sticky = fam == FAM_CROSSBOW;
         crossbow_diagnostic(now, look, camPos, camFwd, fam);
     } else {
         if (wasAiming && g_swayPeakRaw > 0 && g_swayHooked)
@@ -1213,6 +1219,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_remember = kc::ini_int("Options", "RememberBow", 1) != 0;
     g_policy.animals = kc::ini_int("Options", "TargetAnimals", 1) != 0;
     g_lead = kc::ini_int("Options", "LeadMovingTargets", 1) != 0;
+    g_crossbowRateGain = std::max(0, std::min(100, kc::ini_int("Options", "CrossbowSwayRateGain", 40))) / 100.f;
     g_losEnabled = kc::ini_int("Options", "RequireClearShot", 1) != 0;
     g_live = kc::ini_int("Options", "BowPose", 1) != 0;
     {   // Native sway while the assist is on: % of the game's own (100 = vanilla, 0 = none).
@@ -1227,7 +1234,7 @@ static DWORD WINAPI Init(LPVOID) {
     g_ctl.gate.settle = std::max(0, std::min(2000, kc::ini_int("Options", "SettleMs", 200))) / 1000.f;
     HMODULE h = kc::wait_game(); if (!h) { logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h);
-    logf("start v0.6.0 LOCAL DIAGNOSTIC 6 (physics line of sight) (game ts 0x%08X)", R.im.timestamp);
+    logf("start v0.6.0 LOCAL DIAGNOSTIC 7 (stable crossbow target and feedback) (game ts 0x%08X)", R.im.timestamp);
     // Other Theatrical mods and Horse Route Follow also install on CScriptSystem::Update.
     // Their init threads are concurrent, so installing immediately after KCSE load may
     // leave our hook underneath a later non-chaining hook. Let other plugins settle first.
@@ -1284,6 +1291,8 @@ static DWORD WINAPI Init(LPVOID) {
          g_policy.horses ? "yes" : "no", g_policy.dogs ? "yes" : "no", g_marker ? "on" : "off");
     logf("native aim sway while the assist is on: bow %.0f%%, crossbow %.0f%%, hand cannon %.0f%% of the game's%s", g_swayStrength[1] * 100.f, g_swayStrength[2] * 100.f,
          g_swayStrength[3] * 100.f, g_swaySlot ? "" : " (NOT available on this game version)");
+    logf("crossbow feedback: %.0f%% pose-rate compensation; targets sticky until mouse moves or LOS is lost",
+         g_crossbowRateGain * 100.f);
     logf("camera: follows the bow's slow sway (tracking filter %.0f ms, tremor filtered out), does not chase the last %.0f cm, steers only after the bow has been steady for %.0f ms",
          g_ctl.swayTau * 1000.f, g_ctl.glide.tol * 100.f, g_ctl.gate.settle * 1000.f);
     logf("arrow path: %s", g_live ? "from the bow's live arrow joint and the game's speed formula (BowPose=1)" : "from the camera plus measured offsets (BowPose=0)");
