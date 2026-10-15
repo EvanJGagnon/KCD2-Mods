@@ -31,6 +31,22 @@ struct TargetPolicy {
     float score(const Cand& c) const { return c.ang * (c.kind == K_PERSON ? 1.f : animalPenalty) + distWeight * c.dist; }
 };
 
+// After the player has committed a shot, target selection cannot legitimately jump
+// to a newly centred bystander while a hand cannon's fuse is burning.
+// This is deliberately independent of Henry's weapon skill, which changes sway.
+struct FiringTargetPin {
+    bool active = false;
+    bool cancelled = false;
+    uint32_t id = 0;
+    void state(bool firing, uint32_t current) {
+        if (firing && !active) { active = true; cancelled = false; id = current; }
+        else if (!firing) { active = false; cancelled = false; id = 0; }
+    }
+    void user_moved() { if (active) cancelled = true; }
+    bool may_select() const { return !active; }  // even a cancelled shot must not lock onto a new person
+    bool may_steer() const { return !active || (!cancelled && id != 0); }
+};
+
 struct Lock {
     enum Why { KEPT, NEW, SWITCHED, LOOKED_AWAY, LOST, NONE };
     uint32_t id = 0;

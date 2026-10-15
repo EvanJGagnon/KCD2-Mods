@@ -669,6 +669,33 @@ int main() {
                oldS * 100, newS * 100, oldW * 100, newW * 100, van * 100);
         check(newS < 0.06f && newW < 0.08f && oldW > 1.0f, "keeping the aim until the launch puts the shot on the head; stopping at the click misses by metres");
     }
+    printf("30. gun ignition: hold click-time target through fuse, never switch to a bystander\n");
+    {
+        TargetPolicy p; Lock selection; FiringTargetPin pin;
+        Cand before[] = {{125, rad(1.0f), 12.0f, K_PERSON}, {126, rad(8.0f), 16.0f, K_PERSON}};
+        selection.update(before, 2, p, false);
+        pin.state(false, selection.id);
+        uint32_t clicked = selection.id;
+        pin.state(true, selection.id);
+        Cand shifted[] = {{125, rad(5.0f), 12.0f, K_PERSON}, {126, rad(0.2f), 16.0f, K_PERSON}};
+        // Game has shifted sight line during the fuse. If selection ran, it could switch to 126.
+        Lock unpinned = selection;
+        unpinned.update(shifted, 2, p, false);
+        if (pin.may_select()) selection.update(shifted, 2, p, false);
+        check(clicked == 125 && unpinned.id == 126 && !pin.may_select() && pin.id == clicked &&
+              selection.id == 125 && pin.may_steer(),
+              "firing pose oscillation cannot switch the committed target to another person");
+        pin.user_moved();
+        check(!pin.may_steer() && !pin.may_select(),
+              "mouse during ignition cancels auto-follow without taking another target");
+        pin.state(false, selection.id);
+        if (pin.may_select()) selection.update(shifted, 2, p, false);
+        check(pin.may_select() && pin.may_steer() && selection.id == 126,
+              "ordinary target choice resumes only after Firing ends");
+        FiringTargetPin noLock; noLock.state(true, 0);
+        check(!noLock.may_select() && !noLock.may_steer(),
+              "a shot clicked without target cannot acquire a bystander during fuse");
+    }
     printf("%s (%d failed)\n", g_fail ? "FAILED" : "ALL PASSED", g_fail);
     return g_fail;
 }

@@ -213,6 +213,7 @@ static uintptr_t g_player = 0, g_checked = 0; static uint32_t g_playerId = 0; st
 static bool g_wasAiming = false, g_outOfRange = false, g_toldUncal = false;
 static double g_releaseT = -10;                                  // last time the bow stopped being drawn
 static uint32_t g_lock = 0; static V3 g_lockPrev, g_lockVel; static bool g_lockHasPrev = false;
+static mk::FiringTargetPin g_firingPin;  // preserve the click-time target across a delayed gun ignition
 static float g_lastYaw = 0, g_lastPitch = 0; static bool g_haveLast = false;
 static float g_wrX = 0, g_wrZ = 0;                              // what the mod last put into m_lookAngleAccum
 static float g_errStart = 0; static int g_errFrames = 0;        // "does the camera follow?" check
@@ -708,11 +709,15 @@ static void LaunchHookArrow(void* self, const float* pos, const float* dir, cons
 static void update_weapon(double now) {
     g_sub = weapon_state();
     if (g_sub != g_subLogged) {
-        if (g_sub == SUB_FIRING) g_firingT0 = now;
+        if (g_sub == SUB_FIRING) {
+            g_firingT0 = now;
+            KC_DLOG("shot committed: target id %u; holding selection until Firing ends", g_lock);
+        }
         if (g_sub >= 0 || g_sub == -2) KC_DLOG("weapon: %s", g_sub >= 0 ? SUB_NAME[g_sub] : "no shooting action");
         else if (!g_toldNoState) { g_toldNoState = true; logf("weapon state: not readable here - steering on the bow pose check alone"); }
         g_subLogged = g_sub;
     }
+    g_firingPin.state(g_sub == SUB_FIRING, g_lock);
 }
 
 // ---------------- steering ----------------
@@ -721,11 +726,18 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     float rqx = F<float>(look, L_REQUEST), rqz = F<float>(look, L_REQUEST + 8);
     bool moving = fabsf(rqx) + fabsf(rqz) > 0.0015f;
     if (moving) { if (now >= g_userUntil) KC_DLOG("player is aiming by hand - letting go"); g_userUntil = now + g_overrideS; g_haveLast = false; g_errFrames = 0;
-                  g_ctl.hands_on(); }
+                  g_ctl.hands_on();
+                  // User input during ignition cancels auto-steering of the committed shot.
+                  // Never acquire a different target before this projectile launches.
+                  if (g_firingPin.active && !g_firingPin.cancelled) {
+                      g_firingPin.user_moved(); g_lock = 0; g_lockState.id = 0;
+                      KC_DLOG("shot target follow cancelled by manual aim; no reacquisition before launch");
+                  }
+                }
     bool hands = now < g_userUntil;
     static bool s_hands = false; if (s_hands && !hands) g_acqT = now; s_hands = hands;   // ease back in after the mouse
 
-    if (now - g_pickT > (g_lock && !moving ? 0.1 : 0.05)) {
+    if (g_firingPin.may_select() && now - g_pickT > (g_lock && !moving ? 0.1 : 0.05)) {
         g_pickT = now;
         mk::Lock::Why why = pick(camPos, camFwd, hands);
         uint32_t id = g_lockState.id;
@@ -746,7 +758,8 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
             }
         }
     }
-    if (hands) return;
+    if (hands || !g_firingPin.may_steer()) return;
+    if (g_firingPin.active && g_lock != g_firingPin.id) return;  // fail closed: no substitute
     if (!g_lock) return;
     uintptr_t as = actor_system(); void* a = as ? G.getActor((void*)as, g_lock) : nullptr;
     uintptr_t ent = a ? F<uintptr_t>((uintptr_t)a, A_ENTITY) : 0; V3 tp; bool animal, bone = false;
