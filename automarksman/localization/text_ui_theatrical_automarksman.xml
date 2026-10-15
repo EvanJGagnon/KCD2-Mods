@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Table>
+    <Row><Cell>tam_on</Cell><Cell>AutoMarksman: ON (F4)</Cell><Cell>AutoMarksman: ON (F4)</Cell></Row>
+    <Row><Cell>tam_off</Cell><Cell>AutoMarksman: OFF (F4)</Cell><Cell>AutoMarksman: OFF (F4)</Cell></Row>
+    <Row><Cell>tam_bow_measured</Cell><Cell>AutoMarksman: bow measured</Cell><Cell>AutoMarksman: bow measured</Cell></Row>
+    <Row><Cell>tam_first_arrow</Cell><Cell>AutoMarksman: first arrow calibrates your bow</Cell><Cell>AutoMarksman: first arrow calibrates your bow</Cell></Row>
+</Table>
