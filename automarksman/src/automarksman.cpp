@@ -72,6 +72,8 @@ static const char* SIG_SLOTTM   = "40 53 48 83 EC 20 8B DA 33 D2 E8 ?? ?? ?? ?? 
 static const char* SIG_CI_POSE  = "48 8D 81 98 06 00 00 C3";                                                 // CCharInstance vtbl[7] GetISkeletonPose 0x1AA6BC0
 static const char* SIG_CI_SKEL  = "48 8B 81 70 0A 00 00 C3";                                                 // CCharInstance vtbl[11] GetIDefaultSkeleton 0x8A49D0
 static const char* SIG_JOINTID  = "4C 8B C2 4C 8B C9 83 CA FF 41 8A 00 84 C0 74 ?? 3C 5A 7E ?? 41 8A 00 0F B6 C8";   // CDefaultSkeleton vtbl[7] GetJointIDByName 0x78BC4C
+static const char* SIG_JOINTCOUNT = "48 8B 41 08 8B 40 FC C3";                                             // CDefaultSkeleton vtbl[1] GetJointCount 0x1AAF020
+static const char* SIG_JOINTNAME  = "66 85 D2 78 ?? 4C 8B 41 08 0F BF CA 41 3B 48 FC 7D ?? 48 0F BF CA 48 8D 04 49 48 03 C0 49 8B 04 C0 C3";   // CDefaultSkeleton vtbl[6] GetJointNameByID 0x5AF5BC
 static const char* SIG_ABSJOINT = "48 89 5C 24 08 57 48 83 EC 20 48 8D 99 48 02 00 00 8B FA 85 D2 78 ?? 48 8B 03";   // CSkeletonPose vtbl[27] GetAbsJointByID 0x641250
 // Layout checks (found, not called): they fail if the fields the mod reads or writes have moved.
 // Look-angle tick 0x4415E0: ... m_lookAngles(+8) copies, m_lookDeltaTransient(+0x4C) and m_lookAngleAccum(+0x88) cleared.
@@ -171,29 +173,87 @@ static const char* ent_name(uintptr_t e, char* buf, size_t cap) {
 static bool in_image(uintptr_t a) { return a >= G.imgLo && a < G.imgHi; }
 static bool in_text(uintptr_t a) { return a >= G.textLo && a < G.textHi; }
 
-// World position of the "Bip01 Head" bone of an entity's character (slot 0), as Entity.GetBonePos does.
-static struct { uintptr_t skel; int16_t id; } g_jointCache[32]; static int g_jointNext = 0;
-static bool head_bone_raw(uintptr_t ent, V3& out) {
-    uintptr_t ch = (uintptr_t)G.getChar((void*)ent, 0);
-    if (!ch || !kc::is_a(ch, G.vtChar)) return false;
-    uintptr_t skel = (uintptr_t)G.ciSkel((void*)ch); if (!skel || !kc::is_a(skel, G.vtDefSkel)) return false;
-    int id = -2;
-    for (auto& c : g_jointCache) if (c.skel == skel) { id = c.id; break; }
-    if (id == -2) { id = G.jointId((void*)skel, "Bip01 Head"); g_jointCache[g_jointNext] = {skel, (int16_t)id}; g_jointNext = (g_jointNext + 1) % 32; }
-    if (id < 0) return false;
-    uintptr_t pose = (uintptr_t)G.ciPose((void*)ch); if (!pose || !kc::is_a(pose, G.vtPose)) return false;
-    const float* qt = G.absJoint((void*)pose, id); const float* m = G.slotTM((void*)ent, 0);
-    if (!qt || !m) return false;
-    float x = qt[4], y = qt[5], z = qt[6];      // QuatT: q (16 bytes), then t
-    out = V3{m[0] * x + m[1] * y + m[2] * z + m[3], m[4] * x + m[5] * y + m[6] * z + m[7], m[8] * x + m[9] * y + m[10] * z + m[11]};
-    out.z += g_headAbove;                       // the bone sits at the base of the skull; aim at its middle
-    return true;
+// ---------------- skeleton bones ----------------
+// A joint of an entity's character, as the script bind Entity.GetBonePos does it: CEntity::GetCharacter(slot)
+// -> CCharInstance (GetIDefaultSkeleton -> GetJointIDByName; GetISkeletonPose -> GetAbsJointByID: QuatT in
+// model space) -> CEntity::GetSlotWorldTM(slot).  Round 3 found every head lookup failing silently, so each
+// step now reports why it failed (bone_why), the class checks accept any object whose vtable has the very
+// functions the mod resolved (a subclass of the checked class), and when no joint has the asked name the
+// skeleton is searched for one whose name contains the given word ("head", "arrow").
+enum BoneStep { BS_OK, BS_NOCHAR, BS_CHARTYPE, BS_NOSKEL, BS_SKELTYPE, BS_NOJOINT, BS_NOPOSE, BS_POSETYPE, BS_NOTM, BS_BADVAL, BS_FAULT };
+static const char* bone_why(int s) {
+    static const char* w[] = {"ok", "entity has no character in that slot", "character is not a CCharInstance", "character has no skeleton",
+        "skeleton is not a CDefaultSkeleton", "no joint of that name", "character has no pose", "pose is not a CSkeletonPose",
+        "no slot transform", "joint position not finite or zero", "fault while reading"};
+    return s >= 0 && s <= BS_FAULT ? w[s] : "?";
 }
-
-// A fault while reading bones only switches the bone off (the box estimate stays), not the whole assist.
-static bool head_bone(uintptr_t ent, V3& out) {
-    __try { return head_bone_raw(ent, out); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { g_headBone = false; logf("exception reading a head bone - using the body box from now on"); return false; }
+typedef int (*JointCount_t)(void*); typedef const char* (*JointName_t)(void*, int);
+static JointCount_t g_jointCount = nullptr; static JointName_t g_jointName = nullptr;   // CDefaultSkeleton vtbl[1], [6]
+struct Bone { V3 pos; float rot[9]; int id; uintptr_t chVt, skVt, poVt; V3 local; };   // rot: world rotation, row-major
+// "Is this a CCharInstance?": its own vtable, or one with the same functions in the slots the mod calls.
+static bool vt_has(uintptr_t obj, uintptr_t vt, int i1, uintptr_t f1, int i2 = -1, uintptr_t f2 = 0) {
+    uintptr_t v = *(uintptr_t*)obj; if (v == vt) return true;
+    if (!in_image(v)) return false;
+    const uintptr_t* t = (const uintptr_t*)v;
+    return t[i1] == f1 && (i2 < 0 || t[i2] == f2);
+}
+static struct { uintptr_t skel; char key[16]; int16_t id; } g_jointCache[48]; static int g_jointNext = 0;
+static int find_joint(uintptr_t skel, const char* const* names, const char* word) {
+    for (auto& c : g_jointCache) if (c.skel == skel && !strcmp(c.key, names[0])) return c.id;
+    int id = -1;
+    for (int i = 0; names[i] && id < 0; i++) id = G.jointId((void*)skel, names[i]);
+    if (id < 0 && word && g_jointCount && g_jointName) {        // search the skeleton's joint names
+        int n = g_jointCount((void*)skel);
+        for (int j = 0; j < n && j < 1024 && id < 0; j++) {
+            const char* nm = g_jointName((void*)skel, j); if (!nm || !kc::readable((uintptr_t)nm, 1)) continue;
+            char low[64]; int k = 0; for (; nm[k] && k < 63; k++) low[k] = (char)tolower((unsigned char)nm[k]); low[k] = 0;
+            if (strstr(low, word) && !strstr(low, "nub") && !strstr(low, "end") && !strstr(low, "twist")) { id = j; logf("   skeleton joint %d \"%s\" used for \"%s\"", j, nm, names[0]); }
+        }
+    }
+    auto& c = g_jointCache[g_jointNext]; g_jointNext = (g_jointNext + 1) % 48;
+    c.skel = skel; strncpy_s(c.key, names[0], _TRUNCATE); c.id = (int16_t)id;
+    return id;
+}
+static int bone_raw(uintptr_t ent, int slot, const char* const* names, const char* word, Bone& b) {
+    b.chVt = b.skVt = b.poVt = 0; b.id = -1;
+    uintptr_t ch = (uintptr_t)G.getChar((void*)ent, slot); if (!ch) return BS_NOCHAR;
+    b.chVt = *(uintptr_t*)ch - G.imgLo;
+    if (!vt_has(ch, G.vtChar, 7, (uintptr_t)G.ciPose, 11, (uintptr_t)G.ciSkel)) return BS_CHARTYPE;
+    uintptr_t skel = (uintptr_t)G.ciSkel((void*)ch); if (!skel) return BS_NOSKEL;
+    b.skVt = *(uintptr_t*)skel - G.imgLo;
+    if (!vt_has(skel, G.vtDefSkel, 7, (uintptr_t)G.jointId)) return BS_SKELTYPE;
+    int id = find_joint(skel, names, word); b.id = id; if (id < 0) return BS_NOJOINT;
+    uintptr_t pose = (uintptr_t)G.ciPose((void*)ch); if (!pose) return BS_NOPOSE;
+    b.poVt = *(uintptr_t*)pose - G.imgLo;
+    if (!vt_has(pose, G.vtPose, 27, (uintptr_t)G.absJoint)) return BS_POSETYPE;
+    const float* qt = G.absJoint((void*)pose, id); const float* m = G.slotTM((void*)ent, slot);
+    if (!qt || !m) return BS_NOTM;
+    float qx = qt[0], qy = qt[1], qz = qt[2], qw = qt[3], x = qt[4], y = qt[5], z = qt[6];   // QuatT: q (x y z w), then t
+    b.local = V3{x, y, z};
+    if (!std::isfinite(x + y + z + qx + qy + qz + qw) || (x == 0 && y == 0 && z == 0)) return BS_BADVAL;
+    b.pos = V3{m[0] * x + m[1] * y + m[2] * z + m[3], m[4] * x + m[5] * y + m[6] * z + m[7], m[8] * x + m[9] * y + m[10] * z + m[11]};
+    // Joint rotation (quaternion -> matrix), then into the world with the slot's rotation.
+    float r[9] = {1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw),
+                  2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw),
+                  2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)};
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) b.rot[i * 3 + j] = m[i * 4] * r[j] + m[i * 4 + 1] * r[3 + j] + m[i * 4 + 2] * r[6 + j];
+    return BS_OK;
+}
+static int bone(uintptr_t ent, int slot, const char* const* names, const char* word, Bone& b) {
+    __try { return bone_raw(ent, slot, names, word, b); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return BS_FAULT; }
+}
+static const char* const HEAD_NAMES[] = {"Bip01 Head", "Bip01_Head", "head", nullptr};
+static int g_boneFaults = 0;
+static int g_boneWhy = -1; static Bone g_boneInfo; static V3 g_boneAt;   // the last head lookup, for the log
+// Head of a person: the "Bip01 Head" joint (base of the skull) plus HeadAboveBoneCm.  why = BoneStep.
+static bool head_bone(uintptr_t ent, V3& out, int* why = nullptr, Bone* info = nullptr) {
+    Bone b; int s = bone(ent, 0, HEAD_NAMES, "head", b);
+    if (s == BS_FAULT && ++g_boneFaults >= 20) { g_headBone = false; logf("head bone: 20 faults while reading skeletons - using the body box from now on"); }
+    if (why) *why = s; if (info) *info = b;
+    if (s != BS_OK) return false;
+    out = b.pos; out.z += g_headAbove;           // the joint sits at the base of the skull; aim at its middle
+    return true;
 }
 
 // Is this actor in combat (fighting or alerted to a fight)?  Same test as the script bind soul:IsInCombatMode().
@@ -229,13 +289,30 @@ static bool aim_point(uintptr_t ent, V3& out, bool& animal, float* dims = nullpt
     animal = std::max(lx, ly) > 1.25f * h;
     out = mk::vital_point(mn, mx, fwd, g_headDrop);
     bool usedBone = false;
-    if (!animal && g_headBone && useBone) {      // the head bone, if it is inside the body's box (else keep the box estimate)
-        V3 hb;
-        if (head_bone(ent, hb) && hb.x > mn.x - 0.3f && hb.x < mx.x + 0.3f && hb.y > mn.y - 0.3f && hb.y < mx.y + 0.3f && hb.z > mn.z && hb.z < mx.z + 0.3f) { out = hb; usedBone = true; }
+    g_boneWhy = -1;
+    if (!animal && g_headBone && useBone) {      // the head bone, if it is plausibly on this body (else keep the box estimate)
+        V3 hb; int why = 0;
+        if (head_bone(ent, hb, &why, &g_boneInfo)) {
+            bool inside = hb.x > mn.x - 0.5f && hb.x < mx.x + 0.5f && hb.y > mn.y - 0.5f && hb.y < mx.y + 0.5f && hb.z > mn.z + 0.3f * h && hb.z < mx.z + 0.35f;
+            if (inside) { out = hb; usedBone = true; } else why = 100;     // 100: outside the body's box
+        }
+        g_boneWhy = why; g_boneAt = hb;
     }
     if (dims) { dims[0] = lx; dims[1] = ly; dims[2] = h; }
     if (bone) *bone = usedBone;
     return true;
+}
+
+// Why the head bone was (not) used for this target: every step of the lookup, so a failure can be fixed.
+static void log_head(uintptr_t ent, bool used) {
+    const Bone& b = g_boneInfo; float bb[6] = {0}; G.bounds((void*)ent, bb);
+    if (g_boneWhy < 0) { logf("   head: bone lookup off (HeadBone=0)"); return; }
+    if (used) { logf("   head: joint %d at (%.2f %.2f %.2f), %.2f m above the feet of a %.2f m box; model-space (%.2f %.2f %.2f)",
+                     b.id, b.pos.x, b.pos.y, b.pos.z, b.pos.z - bb[2], bb[5] - bb[2], b.local.x, b.local.y, b.local.z); return; }
+    logf("   head: NOT the bone (%s) - aiming %.0f cm below the top of the box instead; character vt +%llx, skeleton vt +%llx, pose vt +%llx, joint %d, "
+         "bone (%.2f %.2f %.2f) model (%.2f %.2f %.2f), box z %.2f..%.2f",
+         g_boneWhy == 100 ? "bone is outside the body's box" : bone_why(g_boneWhy), g_headDrop * 100.f, (unsigned long long)b.chVt, (unsigned long long)b.skVt,
+         (unsigned long long)b.poVt, b.id, g_boneAt.x, g_boneAt.y, g_boneAt.z, b.local.x, b.local.y, b.local.z, bb[2], bb[5]);
 }
 
 // Candidates near the centre of the view, then the soft-lock decision (mk::Lock).
@@ -402,6 +479,7 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
                     logf("target%s: %s (%s%s) %.1f m away at (%.2f %.2f %.2f), %.1f deg from the centre, box %.2f x %.2f x %.2f m",
                          why == mk::Lock::SWITCHED ? " (switched)" : "", ent_name(ent, nm, sizeof nm), kind < 0 ? (animal ? "animal?" : "person?") : mk::kind_name(kind),
                          animal ? ": chest" : bone ? ": head bone" : ": head from box", (p - camPos).len(), p.x, p.y, p.z, mk::deg(mk::angle_between(p - camPos, camFwd)), dims[0], dims[1], dims[2]);
+                    if (!animal) log_head(ent, bone);
                 }
             }
         }
@@ -518,7 +596,7 @@ static void* SsUpdateHook(void* self, void* a, void* b, void* c) {
 
 // ---------------- resolve ----------------
 struct Found { uintptr_t ssUpdate, ssExec, fwGlobal, clientActor, sysGlobal, viewCamera, getEntity, bounds, getActor, mkIter, iterNext, iterRel, deadByHp, launch,
-                launchArrow, getChar, slotTM, ciPose, ciSkel, jointId, absJoint; };
+                launchArrow, getChar, slotTM, ciPose, ciSkel, jointId, absJoint, jointCount, jointName; };
 static bool resolve(kc::Resolver& R, Found& f) {
     G.vtSS = R.vtable("CScriptSystem", ".?AVCScriptSystem@@", 0);
     uintptr_t cur = G.vtSS ? ((uintptr_t*)G.vtSS)[1] : 0;
@@ -565,6 +643,8 @@ static bool resolve(kc::Resolver& R, Found& f) {
     f.ciSkel = R.slot("CCharInstance::GetIDefaultSkeleton", G.vtChar, 11, SIG_CI_SKEL);
     G.vtDefSkel = R.vtable("CDefaultSkeleton", ".?AVCDefaultSkeleton@@", 0);
     f.jointId = R.slot("CDefaultSkeleton::GetJointIDByName", G.vtDefSkel, 7, SIG_JOINTID);
+    f.jointCount = R.slot("CDefaultSkeleton::GetJointCount", G.vtDefSkel, 1, SIG_JOINTCOUNT);
+    f.jointName = R.slot("CDefaultSkeleton::GetJointNameByID", G.vtDefSkel, 6, SIG_JOINTNAME);
     G.vtPose = R.vtable("CSkeletonPose", ".?AVCSkeletonPose@@", 0);
     f.absJoint = R.slot("CSkeletonPose::GetAbsJointByID", G.vtPose, 27, SIG_ABSJOINT);
     R.find("actor combat state (layout)", SIG_COMBATMODE);
@@ -617,6 +697,7 @@ static DWORD WINAPI Init(LPVOID) {
     G.launch = (Launch_t)f.launch; G.ssUpdate = (SsUpdate_t)f.ssUpdate; G.launchArrow = (Launch_t)f.launchArrow;
     G.getChar = (GetChar_t)f.getChar; G.slotTM = (SlotTM_t)f.slotTM; G.ciPose = (CiGet_t)f.ciPose; G.ciSkel = (CiGet_t)f.ciSkel;
     G.jointId = (JointId_t)f.jointId; G.absJoint = (AbsJoint_t)f.absJoint;
+    g_jointCount = (JointCount_t)f.jointCount; g_jointName = (JointName_t)f.jointName;
     G.imgLo = R.im.base; G.imgHi = R.im.end; G.textLo = R.im.text0; G.textHi = R.im.text1;
     load_calib();
     kc::write_ptr(&((void**)G.vtProjectile)[35], (void*)&LaunchHook);

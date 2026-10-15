@@ -36,6 +36,8 @@ PLAN = {
     'SIG_CI_SKEL':        ('slot', '.?AVCCharInstance@@', 11, 0x8A49D0),
     'SIG_JOINTID':        ('slot', '.?AVCDefaultSkeleton@@', 7, 0x78BC4C),
     'SIG_ABSJOINT':       ('slot', '.?AVCSkeletonPose@@', 27, 0x641250),
+    'SIG_JOINTCOUNT':     ('slot', '.?AVCDefaultSkeleton@@', 1, 0x1AAF020),
+    'SIG_JOINTNAME':      ('slot', '.?AVCDefaultSkeleton@@', 6, 0x5AF5BC),
     'SIG_COMBATMODE':     ('find', 0x117F1E8),
 }
 RTTI_ONLY = ['.?AVC_Player@entitymodule@wh@@', '.?AVC_MissileWeaponPlayerController@entitymodule@wh@@', '.?AVCArrow@entitymodule@wh@@',
