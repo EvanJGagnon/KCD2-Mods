@@ -27,10 +27,11 @@ gives the game's sway back at once.
 That is all it does. The game flies the arrow, sways the bow with Henry's skill and stamina, and decides
 whether the shot hits. Nothing is teleported, no hit is forced, and no item, arrow or stat is changed.
 
-CROSSBOWS (EXPERIMENTAL, OFF)
-  Crossbows are off in this release (Crossbows=0): with a crossbow the camera and sway stay vanilla.
-  With Crossbows=1 the assist aims crossbows too, but the camera can still bob up and down with some
-  crossbows. A separate "Experimental Crossbow" download of this mod has it switched on.
+CROSSBOWS (EXPERIMENTAL, OFF IN THIS DOWNLOAD)
+  Crossbows are off in the main download (Crossbows=0): with a crossbow the camera and sway stay
+  vanilla. Crossbow aiming works reasonably well but has had less testing than bows and hand cannons,
+  so it comes as a separate "Experimental Crossbow" download (the same mod with Crossbows=1 and the
+  detailed log on). You can also switch it on yourself: set Crossbows=1 in the .ini.
 
 REQUIREMENTS
   - Kingdom Come Script Extender (KCSE) by JerryYOJ
@@ -85,13 +86,22 @@ SETTINGS  (Mods\theatrical_automarksman\KCSE\Plugins\kcd2_automarksman.ini)
             CrossbowPoseDiagnostics=0   experimental crossbow logging (with DebugLog=1)
             DebugLog=0            1 = detailed log (kcd2_automarksman.log), including every shot's real miss
 
+COMPATIBILITY
+  - Works next to other KCSE plugins that hook the same game update (Horse Route Follow, Theatrical
+    AutoSharpening): it starts a moment later and chains to them.
+  - Played with Arrow Arc and Faster Bow Charge Duration installed. Mods that change bow, crossbow or
+    arrow stats are fine: the mod reads the live weapon and the game's own speed formula.
+  - Built and checked for the Steam version 1.5.x (build 15693). Other stores and versions are untested;
+    on an unknown version the mod switches itself off and changes nothing.
+
 KNOWN ISSUES AND LIMITATIONS
   - Crossbows: see above.
   - The aim assumes a full draw; an arrow loosed early is slower and drops more.
   - The game fires a moment after you release (on the animation), so a weapon that is still swaying
     then can still move the shot a little. A shaky, low-skill or tired Henry still misses.
-  - Line of sight checks walls, terrain and solid props, not other people standing in the way.
-  - Only checked against the Steam version of the game (1.5.x, build 15693).
+  - Partial cover: the mod checks for a clear path to the head only. Someone behind a fence, railing,
+    window bars or a low wall may be skipped even when part of them is visible, and a shot that would
+    clip the top of the cover is not taken. Line of sight also ignores other people standing in the way.
 
 GAME UPDATES
   The mod does not use fixed memory addresses. At startup it finds the game code it needs by pattern and

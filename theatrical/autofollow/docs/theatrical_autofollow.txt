@@ -37,8 +37,12 @@ SETTINGS  (Mods\theatrical_autofollow\KCSE\Plugins\kcd2_autofollow.ini)
             DebugDraw=0     1 = also turn on the game's own follow debug drawing (for testing)
             DebugLog=0      1 = detailed log for bug reports
 
-KNOWN ISSUES AND LIMITATIONS
-  - Only checked against the Steam version of the game (1.5.x, build 15693).
+COMPATIBILITY
+  - Changes one check in memory only while it is on (nothing on disk, nothing in your save); switching
+    it off with ] restores the game's own behaviour. Another mod that patches the same follow check
+    would conflict.
+  - Built and checked for the Steam version 1.5.x (build 15693). Other stores and versions are untested;
+    on an unknown version the mod switches itself off and changes nothing.
 
 GAME UPDATES
   The mod does not use fixed memory addresses. At startup it finds the game's "followable" check by

@@ -1,0 +1,81 @@
+NAME
+Theatrical AutoPickpocket
+
+CATEGORY
+Gameplay
+
+VERSION
+1.0.0
+
+SUMMARY (272/350 characters)
+Henry pickpockets like a careful thief, with the game's own controls: he lets go of the key when the safety ring says so, then plays the item grid and leaves through the exit in time. Detection, timers and item costs stay the game's; Henry can still get caught. [ toggles.
+
+DESCRIPTION (BBCode)
+[size=4][b]Theatrical AutoPickpocket[/b][/size]
+
+Henry pickpockets for you, the way a careful thief would, with the game's own controls. You still sneak up, start the pickpocket and hold the key. The mod then does the two things you would do with your fingers: it lets go of the key when the safety ring says it is time, and it plays the item grid (turning the selector, uncovering, taking and leaving through the exit before time runs out).
+
+[b]Nothing is forced.[/b] The victim's alertness, your skill, the selector speed, the time every item costs and the detection roll are all the game's. A bad roll still gets Henry caught, and running out of time away from the exit still gets him caught. Items only move when the game itself closes the grid, so stolen goods, crime and reputation all work as normal.
+
+[b]How to use[/b]
+[list=1]
+[*]Press [b][[/b] (left square bracket) to switch the mod on (it starts off; a short message confirms it).
+[*]Sneak up behind someone and start pickpocketing as usual. Hold the key.
+[*]The mod lets go of the key once the ring falls to the safety you chose (ReleaseSafety). Letting go yourself earlier works as always.
+[*]In the item grid, keep your hands off the grid keys. The mod plans the whole round: the most valuable set of items it has time for, in the shortest sweep round the ring, then leaves through the exit with time to spare.
+[/list]
+[b][[/b] again switches it off; switching off during the grid hands the grid straight back to you.
+
+[b]Requirements[/b]
+[list]
+[*][url=https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332]Kingdom Come Script Extender (KCSE)[/url] by JerryYOJ
+[*][url=https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381]Address Library For KCSE[/url] by JerryYOJ
+[/list]
+
+[b]Installation[/b]
+[list]
+[*][b]Vortex:[/b] install as usual.
+[*][b]Manual:[/b] copy the [i]theatrical_autopickpocket[/i] folder from the archive into [i]<game>\Mods\[/i]. You should end up with [i]<game>\Mods\theatrical_autopickpocket\KCSE\Plugins\kcd2_autopickpocket.dll[/i].
+[*][b]Uninstall:[/b] delete that folder.
+[/list]
+Only download our mods from Nexus Mods (Flubbermunchkin) or our GitHub. They never come with an installer or .exe.
+
+[b]Settings[/b] ([i]Mods\theatrical_autopickpocket\KCSE\Plugins\kcd2_autopickpocket.ini[/i])
+[list]
+[*][b]Toggle=[[/b]: on/off key (F1-F12, a letter or digit, or a symbol key such as ])
+[*][b]Enabled=0[/b]: 1 = on when the game starts
+[*][b]Charge=1[/b]: 1 = let go of the pickpocket key for you
+[*][b]Grid=1[/b]: 1 = play the item grid for you
+[*][b]ReleaseSafety=0.35[/b]: ring value at which the key is released (1 = full green, 0.05 = almost red); higher is safer but leaves less time
+[*][b]MaxChargeSeconds=0[/b]: 0 = no limit; otherwise also let go after this many seconds
+[*][b]SafetyMs=1500[/b]: time always kept in hand beyond the way back to the exit
+[*][b]MinValue=0[/b]: leave items worth less than this
+[*][b]Uncover=1[/b]: 1 = look under covered items when there is time
+[*][b]Notices=1[/b]: 1 = short message when the key switches it
+[*][b]DebugLog=0[/b]: 1 = detailed log for bug reports
+[/list]
+
+[b]Compatibility[/b]
+Uses only the game's own pickpocket input and grid controls; mods that change pickpocketing difficulty or time apply as normal. A mod that replaces the pickpocket screen may not work with it. Pressing the grid keys yourself while the mod plays the grid confuses it: press [ first.
+
+[b]Game updates[/b]
+The mod uses no fixed memory addresses: it finds the game code it needs by pattern at startup. Built and checked for the Steam version 1.5.x (build 15693); other stores and versions are untested. If a game update changes that code, the mod switches itself off and changes nothing, and its log says so.
+
+[b]Bug reports[/b]
+Please set DebugLog=1 in the .ini, reproduce the problem and attach [i]kcd2_autopickpocket.log[/i] (next to the DLL, rewritten every session).
+
+[b]More from the Theatrical series[/b]
+Theatrical AutoForge, Theatrical Autobrew, Theatrical AutoSharpening, Theatrical AutoLockpick, Theatrical AutoDice, Theatrical AutoFollow, Theatrical AutoMarksman.
+
+[b]Credits[/b]
+Warhorse Studios, whose minigame this is. JerryYOJ for KCSE, the Address Library and libKCD2 (GPL-3.0), whose C_Pickpocketing field names were the starting point for this mod's research.
+Source code (GPL v3): [url=https://github.com/EvanJGagnon/KCD2-Mods]github.com/EvanJGagnon/KCD2-Mods[/url]. Made with AI assistance (Claude).
+
+FILES
+Main file: TheatricalAutoPickpocket-1.0.0.zip
+  Name: Theatrical AutoPickpocket
+  Version: 1.0.0
+  Description: Henry releases the charge safely and plays the item grid ([ toggles).
+
+CHANGELOG (Nexus "Logs" tab)
+1.0.0 - First release.

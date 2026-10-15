@@ -36,8 +36,13 @@ SETTINGS  (Mods\theatrical_autodice\KCSE\Plugins\kcd2_autodice.ini)
             RiskPercent=100    above 100 he presses on more, below 100 he banks sooner
             DebugLog=0         1 = detailed log for bug reports
 
+COMPATIBILITY
+  - Uses only the game's own dice actions; the game throws, scores and pays. A mod that changes the
+    scoring rules can make Henry's choices worse (the game still scores correctly).
+  - Built and checked for the Steam version 1.5.x (build 15693). Other stores and versions are untested;
+    on an unknown version the mod switches itself off and changes nothing.
+
 KNOWN ISSUES AND LIMITATIONS
-  - Only built for the Steam version of the game (1.5.x, build 15693).
   - The mod counts points by the standard rules; badges that change scoring are scored by the game
     itself (the log notes the difference), but Henry's plan does not take them into account.
 

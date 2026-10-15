@@ -1,0 +1,75 @@
+NAME
+Theatrical AutoFollow
+
+CATEGORY
+Gameplay
+
+VERSION
+1.0.0
+
+SUMMARY (229/350 characters)
+Follow anyone. The game only offers Follow for certain NPCs, such as guides; this mod makes it treat every NPC as followable, as the game's own unused developer switch describes. The following itself is all the game's. ] toggles.
+
+DESCRIPTION (BBCode)
+[size=4][b]Theatrical AutoFollow[/b][/size]
+
+Henry can follow anyone. Normally the game only offers "Follow" for certain NPCs - the ones it marks as followable, such as a guide leading you somewhere. This mod makes the game treat every NPC as followable, the way its own developer switch "wh_player_FollowAlwaysCanFollow" describes it ("player can follow anyone as if they had followable NPC side effect").
+
+Everything else is the game's own following: the same Follow prompt and key, Henry walking or running after the person at their pace, the same way of stopping. The game's other rules still apply (it does not offer Follow for everyone in every situation, such as the dead). The mod adds no pathfinding of its own, moves nobody, and changes nothing in quests or your save.
+
+[b]How to use[/b]
+[list=1]
+[*]Walk up to a person, ideally one who is walking somewhere, and look at them.
+[*]The game's "Follow" prompt appears, as it does for a guide. Use it.
+[*]Henry follows them until you move or stop following.
+[/list]
+[b]][/b] switches follow-anyone off (vanilla behaviour) and on again.
+
+[b]Requirements[/b]
+[list]
+[*][url=https://www.nexusmods.com/kingdomcomedeliverance2/mods/3332]Kingdom Come Script Extender (KCSE)[/url] by JerryYOJ
+[*][url=https://www.nexusmods.com/kingdomcomedeliverance2/mods/3381]Address Library For KCSE[/url] by JerryYOJ
+[/list]
+
+[b]Installation[/b]
+[list]
+[*][b]Vortex:[/b] install as usual.
+[*][b]Manual:[/b] copy the [i]theatrical_autofollow[/i] folder from the archive into [i]<game>\Mods\[/i]. You should end up with [i]<game>\Mods\theatrical_autofollow\KCSE\Plugins\kcd2_autofollow.dll[/i].
+[*][b]Uninstall:[/b] delete that folder.
+[/list]
+Only download our mods from Nexus Mods (Flubbermunchkin) or our GitHub. They never come with an installer or .exe.
+
+[b]Settings[/b] ([i]Mods\theatrical_autofollow\KCSE\Plugins\kcd2_autofollow.ini[/i])
+[list]
+[*][b]Toggle=][/b]: on/off key (F1-F12, a letter or digit, or a symbol key such as ])
+[*][b]Enabled=1[/b]: 1 = on when the game starts
+[*][b]Notices=1[/b]: 1 = short message when the key switches it
+[*][b]SetCvar=1[/b]: 1 = also set the game's own (unused) developer switch
+[*][b]DebugDraw=0[/b]: 1 = also turn on the game's own follow debug drawing (for testing)
+[*][b]DebugLog=0[/b]: 1 = detailed log for bug reports
+[/list]
+
+[b]Compatibility[/b]
+Changes one check in memory only, nothing on disk or in your save; ] switches it back to the game's own behaviour. Another mod that patches the same follow check would conflict.
+
+[b]Game updates[/b]
+The mod uses no fixed memory addresses: it finds the game code it needs by pattern at startup. Built and checked for the Steam version 1.5.x (build 15693); other stores and versions are untested. If a game update changes that code, the mod switches itself off and changes nothing, and its log says so.
+
+[b]Bug reports[/b]
+Please set DebugLog=1 in the .ini, reproduce the problem and attach [i]kcd2_autofollow.log[/i] (next to the DLL, rewritten every session).
+
+[b]More from the Theatrical series[/b]
+Theatrical AutoForge, Theatrical Autobrew, Theatrical AutoSharpening, Theatrical AutoLockpick, Theatrical AutoDice, Theatrical AutoPickpocket, Theatrical AutoMarksman.
+
+[b]Credits[/b]
+Warhorse Studios, whose own switch this is. JerryYOJ for KCSE and the Address Library.
+Source code (GPL v3): [url=https://github.com/EvanJGagnon/KCD2-Mods]github.com/EvanJGagnon/KCD2-Mods[/url]. Made with AI assistance (Claude).
+
+FILES
+Main file: TheatricalAutoFollow-1.0.0.zip
+  Name: Theatrical AutoFollow
+  Version: 1.0.0
+  Description: Follow anyone with the game's own Follow action (] toggles).
+
+CHANGELOG (Nexus "Logs" tab)
+1.0.0 - First release.

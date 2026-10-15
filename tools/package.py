@@ -115,8 +115,9 @@ MODS = [
          variant_of='TheatricalAutoMarksman', experimental=True,
          desc=AM_DESC + ' EXPERIMENTAL: crossbows are aimed too (Crossbows=1) and the detailed log is on.',
          note='This download is the same mod with Crossbows=1, CrossbowPoseDiagnostics=1 and DebugLog=1 in the .ini.\n'
-              'The camera can still bob up and down with some crossbows. It replaces the normal download (same folder);\n'
-              'set Crossbows=0 or install the normal download to go back. Please send kcd2_automarksman.log with reports.',
+              'Crossbow aiming works reasonably well but is less tested than bows and hand cannons. It replaces the\n'
+              'normal download (same folder): set Crossbows=0 or install the normal download to go back.\n'
+              'Please send kcd2_automarksman.log with reports.',
          text=automarksman_text(), ini=automarksman_ini(True)),
 ]
 

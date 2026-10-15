@@ -47,8 +47,13 @@ SETTINGS  (Mods\theatrical_autopickpocket\KCSE\Plugins\kcd2_autopickpocket.ini)
             Notices=1            1 = short on-screen message when the key switches it
             DebugLog=0           1 = detailed log for bug reports
 
+COMPATIBILITY
+  - Uses only the game's own pickpocket input and grid controls; mods that change pickpocketing
+    difficulty or time apply as normal. A mod that replaces the pickpocket screen may not work with it.
+  - Built and checked for the Steam version 1.5.x (build 15693). Other stores and versions are untested;
+    on an unknown version the mod switches itself off and changes nothing.
+
 KNOWN ISSUES AND LIMITATIONS
-  - Only checked against the Steam version of the game (1.5.x, build 15693).
   - The mod decides only on what you could see: it does not know what is under a covered item until it
     uncovers it.
   - Pressing the grid keys yourself while the mod plays the grid confuses it. Press [ first.

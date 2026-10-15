@@ -31,8 +31,12 @@ SETTINGS  (Mods\theatrical_autolockpick\KCSE\Plugins\kcd2_autolockpick.ini)
             MaxTries=6       tries per lock before handing it back
             DebugLog=0       1 = detailed log in kcd2_autolockpick.log (for bug reports)
 
-KNOWN ISSUES AND LIMITATIONS
-  - Only checked against the Steam version of the game (1.5.x, build 15693).
+COMPATIBILITY
+  - Uses only the game's own pick and turn controls, so mods that change lock difficulty or Henry's
+    tremble apply as normal (played with "The Master Lockpicker - Half Hand Shaking" installed).
+  - A mod that removes or replaces the lockpicking minigame leaves this mod nothing to do.
+  - Built and checked for the Steam version 1.5.x (build 15693). Other stores and versions are untested;
+    on an unknown version the mod switches itself off and changes nothing.
 
 GAME UPDATES
   The mod does not use fixed memory addresses. At startup it finds the game code it needs by pattern
