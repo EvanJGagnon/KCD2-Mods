@@ -28,6 +28,7 @@
 #include <atomic>
 #include <mutex>
 #include <random>
+#include <string>
 
 using kc::logf;
 template<class T> static T& F(uintptr_t p, uintptr_t o) { return *(T*)(p + o); }
