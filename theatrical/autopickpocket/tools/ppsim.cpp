@@ -150,8 +150,10 @@ static Grid random_grid(std::mt19937& rng, bool game, float& possible) {
 struct Result { bool caught; int taken, moves; float value, possible; double left; };
 static Result run_grid(std::mt19937& rng, const Grid& g, float possible, const Config& cfg, bool verbose, double fps, bool hitches, int hintMode) {
     // hintMode 0: hints during the call (sync); 1: right after the call, same moment (what the game did in
-    // round 2 and on 2026-10-17: another thread delivers them); 2: half a frame later
+    // round 2 and on 2026-10-17: another thread delivers them); 2: half a frame later; 3: as 1, but the UI never
+    // says the selector stopped on a covered tile (not seen in a game log yet: the mod must not depend on it)
     bool asyncHints = hintMode != 0;
+    bool noHiddenArrival = hintMode == 3; if (hintMode == 3) hintMode = 1;
     std::uniform_real_distribution<double> U(0, 1);
     Flash f; std::vector<Hint> hints; f.sink = &hints;
     Controller c; c.cfg = cfg; c.log = verbose ? logsink : nullptr; c.closeAck = !asyncHints;
@@ -171,7 +173,7 @@ static Result run_grid(std::mt19937& rng, const Grid& g, float possible, const C
             if (verbose) printf("      t=%.0f %s -> %s (flash slot %d, model %d)\n", now - 1000, cmd_name(cmd), f.q.size() != qb || f.closed || !hints.empty() ? "accepted" : "ignored", f.q.back(), c.pos);
             if (f.closed) c.closed((uint64_t)now, f.result);
             if (!asyncHints) for (auto& h : hints) c.hint(h, (uint64_t)now);
-            else for (auto& h : hints) late.push_back({now + (hintMode == 1 ? 0.0 : dt * 0.5), h});
+            else for (auto& h : hints) if (!(noHiddenArrival && h.action == H_UNCOVER && h.visible && h.enable)) late.push_back({now + (hintMode == 1 ? 0.0 : dt * 0.5), h});
             hints.clear();
             c.sent((uint64_t)now);
             if (hintMode == 1) while (!late.empty() && late.front().first <= now) { c.hint(late.front().second, (uint64_t)now); late.pop_front(); }
@@ -180,7 +182,7 @@ static Result run_grid(std::mt19937& rng, const Grid& g, float possible, const C
         f.frame(now);
         if (f.closed) c.closed((uint64_t)now, f.result);
         if (!asyncHints) { for (auto& h : hints) c.hint(h, (uint64_t)now); }
-        else for (auto& h : hints) late.push_back({now + (hintMode == 1 ? 0.0 : dt * 0.5), h});
+        else for (auto& h : hints) if (!(noHiddenArrival && h.action == H_UNCOVER && h.visible && h.enable)) late.push_back({now + (hintMode == 1 ? 0.0 : dt * 0.5), h});
         hints.clear();
         if (hintMode == 1) while (!late.empty() && late.front().first <= now) { c.hint(late.front().second, (uint64_t)now); late.pop_front(); }
     }
@@ -238,6 +240,7 @@ int main(int argc, char** argv) {
         {"game 45fps async", 45, true, 2, true, true}, {"game 60fps deferred", 60, false, 1, true, true}, {"game omniscient", 60, false, false, false, true},
         {"slow 60fps+hitches", 60, true, false, true, false}, {"slow 30fps+hitches", 30, true, false, true, false},
         {"slow 45fps async", 45, true, 2, true, false}, {"slow 60fps deferred", 60, true, 1, true, false},
+        {"slow deferred, no arrival on covered", 60, true, 3, true, false},
     };
     for (auto& v : vs) {
         std::mt19937 rng(seed);
