@@ -30,7 +30,7 @@
 
 using kc::logf;
 
-#define VERSION "1.0.0"
+#define VERSION "1.0.1"
 
 // ---------------- signatures (build 15693 RVAs in comments) ----------------
 // C_Pickpocketing::Update: mov ecx,[rcx+78h] (state) right after the stack cookie                 0x2EB3B34

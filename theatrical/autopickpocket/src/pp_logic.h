@@ -117,6 +117,9 @@ struct Controller {
     // whole half-degree frame steps, so the real speed depends on the frame rate and rounding).
     double measured[2] = {0, 0}; int nMeasured[2] = {0, 0};
     uint64_t lastMoveAt = 0, lastRejectAt = 0; int lastMoveDir = 0; bool retriedSinceMove = false;
+    bool moving = false;            // a move was accepted and the UI has not said the selector stopped yet
+    bool expectArrival = false;     // ... and we are waiting for it to say so instead of retrying
+    bool arrivalOk = true;          // cleared for the rest of the grid the first time an expected arrival hint is missing
     double slotMs() const { return 1000.0 / (g.selectorSpeed > 0.05f ? g.selectorSpeed : 0.05f); }
     bool fastStep(int s, int d) const { return g.easyWayOut && ((d > 0 && s >= 6) || (d < 0 && s <= 6) || (d < 0 && s == EXIT)); }
     // One step from slot s in direction d (Easy Way Out doubles the speed towards the exit).
@@ -240,6 +243,10 @@ struct Controller {
         }
         age(now);
         if (pending(now)) return C_NONE;
+        if (expectArrival && now >= nextTry) {          // the UI never said the selector stopped: stop relying on it
+            expectArrival = false; arrivalOk = false;
+            logf("no arrival hint on slot %d - timed retries from now on", pos);
+        }
         if (now < nextTry || now < waitUntil) return C_NONE;
         // Out of time on the way: head home whatever the plan.
         if (goal != 3 && remainingMs(now) < homeMs(pos) + cfg.safetyMs) { target = EXIT; goal = 3; logf("time is short (%.1fs) - home", remainingMs(now) / 1000); }
@@ -319,6 +326,22 @@ struct Controller {
                 accept(c, mv, un, tk, lateAt, now); return;
             }
         }
+        // On its own: the selector came to rest on the slot of the last move. The UI says so on the exit and on
+        // every slot holding an item (close / uncover / take, visible and enabled), not on empty slots. That is
+        // the moment the next command is accepted, and the exact time the step took.
+        if (moving && h.visible && h.enable && pendCmd == C_NONE && lateCmd == C_NONE &&
+            ((pos == EXIT && h.action == H_CLOSE) || (pos != EXIT && st[pos] != S_EMPTY && (h.action == H_UNCOVER || h.action == H_TAKE)))) {
+            moving = false; expectArrival = false;
+            int d = lastMoveDir, f = fastStep((pos - d + NSLOT) % NSLOT, d) ? 1 : 0;
+            double nom = slotMs() * (f ? 0.5 : 1.0), smp = (double)(now - lastMoveAt);
+            if (smp >= nom * 0.6 && smp <= nom * 1.6 + 60) {
+                measured[f] = nMeasured[f] ? 0.7 * measured[f] + 0.3 * smp : smp;
+                if (!nMeasured[f]++) logf("selector step measured: %.0fms%s (nominal %.0fms)", smp, f ? " towards the exit" : "", nom);
+            }
+            if (nextTry > now) nextTry = now;
+            if (arriveAt > now) arriveAt = now;
+            if (!(st[pos] == S_UNCOVERING && h.action == H_TAKE)) return;
+        }
         // On its own: the tile under the selector finished uncovering.
         if (h.action == H_TAKE && h.visible && h.enable && pos != EXIT && st[pos] == S_UNCOVERING) {
             logf("slot %d uncovered after %.0fms: %s price=%.1f cost=%.1fs", pos, (double)(now - stateAt[pos]), g.slot[pos].name, g.slot[pos].price, costMs(g.slot[pos]) / 1000);
@@ -361,8 +384,15 @@ struct Controller {
             }
             double ms = stepMs(pos, d); pos = (pos + d + NSLOT) % NSLOT; moves++;
             double nomStep = slotMs() * (fastStep((pos - d + NSLOT) % NSLOT, d) ? 0.5 : 1.0);
-            lastMoveAt = at; lastMoveDir = d; retriedSinceMove = false;
+            lastMoveAt = at; lastMoveDir = d; retriedSinceMove = false; moving = true;
             nextTry = at + (uint64_t)(fmin(ms, nomStep) * (sync ? 0.7 : 0.9)); arriveAt = at + (uint64_t)ms;   // early retries are harmless
+            // ... except when hints come after the call (the game on 2026-10-17): then every refused try waits
+            // pendingMs for nothing. On the exit and on a slot with an item the UI says when the selector stops,
+            // so wait for that (with a late fallback in case it never comes); elsewhere (also on slots already taken)
+            // try once it should be there.
+            // If that hint is ever missing, the rest of the grid goes back to timed retries (arrivalOk).
+            expectArrival = !sync && arrivalOk && (pos == EXIT || (st[pos] != S_EMPTY && st[pos] != S_SELECT));
+            if (!sync) nextTry = at + (uint64_t)(expectArrival ? nomStep * 1.6 + 60 : ms);
             return;
         }
         if (un) { st[pos] = S_UNCOVERING; stateAt[pos] = at; uncovers++; logf("slot %d: uncovering", pos); return; }

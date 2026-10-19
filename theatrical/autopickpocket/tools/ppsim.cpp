@@ -148,7 +148,12 @@ static Grid random_grid(std::mt19937& rng, bool game, float& possible) {
 }
 
 struct Result { bool caught; int taken, moves; float value, possible; double left; };
-static Result run_grid(std::mt19937& rng, const Grid& g, float possible, const Config& cfg, bool verbose, double fps, bool hitches, bool asyncHints) {
+static Result run_grid(std::mt19937& rng, const Grid& g, float possible, const Config& cfg, bool verbose, double fps, bool hitches, int hintMode) {
+    // hintMode 0: hints during the call (sync); 1: right after the call, same moment (what the game did in
+    // round 2 and on 2026-10-17: another thread delivers them); 2: half a frame later; 3: as 1, but the UI never
+    // says the selector stopped on a covered tile (not seen in a game log yet: the mod must not depend on it)
+    bool asyncHints = hintMode != 0;
+    bool noHiddenArrival = hintMode == 3; if (hintMode == 3) hintMode = 1;
     std::uniform_real_distribution<double> U(0, 1);
     Flash f; std::vector<Hint> hints; f.sink = &hints;
     Controller c; c.cfg = cfg; c.log = verbose ? logsink : nullptr; c.closeAck = !asyncHints;
@@ -168,16 +173,18 @@ static Result run_grid(std::mt19937& rng, const Grid& g, float possible, const C
             if (verbose) printf("      t=%.0f %s -> %s (flash slot %d, model %d)\n", now - 1000, cmd_name(cmd), f.q.size() != qb || f.closed || !hints.empty() ? "accepted" : "ignored", f.q.back(), c.pos);
             if (f.closed) c.closed((uint64_t)now, f.result);
             if (!asyncHints) for (auto& h : hints) c.hint(h, (uint64_t)now);
-            else for (auto& h : hints) late.push_back({now + dt * 0.5, h});
+            else for (auto& h : hints) if (!(noHiddenArrival && h.action == H_UNCOVER && h.visible && h.enable)) late.push_back({now + (hintMode == 1 ? 0.0 : dt * 0.5), h});
             hints.clear();
             c.sent((uint64_t)now);
+            if (hintMode == 1) while (!late.empty() && late.front().first <= now) { c.hint(late.front().second, (uint64_t)now); late.pop_front(); }
         }
         // ... then the movie frame
         f.frame(now);
         if (f.closed) c.closed((uint64_t)now, f.result);
         if (!asyncHints) { for (auto& h : hints) c.hint(h, (uint64_t)now); }
-        else for (auto& h : hints) late.push_back({now + dt * 0.5, h});
+        else for (auto& h : hints) if (!(noHiddenArrival && h.action == H_UNCOVER && h.visible && h.enable)) late.push_back({now + (hintMode == 1 ? 0.0 : dt * 0.5), h});
         hints.clear();
+        if (hintMode == 1) while (!late.empty() && late.front().first <= now) { c.hint(late.front().second, (uint64_t)now); late.pop_front(); }
     }
     Result r{!f.result, c.taken, c.moves, c.value, possible, f.m_time - (now - f.origin)};
     if (verbose) { printf("  flash: queue="); for (int x : f.q) printf("%d ", x); printf("rot=%.1f dir=%d model pos=%d\n", f.rot, f.dir, c.pos); }
@@ -194,15 +201,31 @@ static Grid logged_grid(int which) {
     for (auto& x : which ? b : a) { Item& it = g.slot[x.slot]; it.present = it.uncovered = true; it.price = x.price; it.count = 1; snprintf(it.name, sizeof it.name, "%s", x.name); }
     return g;
 }
+// 2026-10-17 grid from the game log (1.0.0): 11.09 s, 2.94 slots/s, hints right after the call. 1.0.0 took 3
+// and gave up on slot 4 ("no longer fits"): every refused early move cost 150 ms of waiting.
+static Grid logged_grid3() {
+    Grid g; g.selectorSpeed = 2.94f; g.maxTimeSec = 30; g.easyWayOut = false; g.timeSec = 11.09f;
+    struct { int slot; float price; const char* name; } a[] = {{4, 0, "keyring"}, {6, 5.1f, "money"}, {7, 20, "money"}, {8, 0, "keyring"}, {9, 1.8f, "griddlecake"}};
+    for (auto& x : a) { Item& it = g.slot[x.slot]; it.present = it.uncovered = true; it.price = x.price; it.count = 1; snprintf(it.name, sizeof it.name, "%s", x.name); }
+    return g;
+}
 static int regress() {
     int bad = 0; Config cfg;
     for (int w = 0; w < 2; w++) for (double fps : {60.0, 30.0}) {
         std::mt19937 rng(5 + w);
         Grid g = logged_grid(w); float possible = 0; for (auto& it : g.slot) if (it.present) possible += it.price;
-        Result r = run_grid(rng, g, possible, cfg, g_verbose, fps, false, false);
+        Result r = run_grid(rng, g, possible, cfg, g_verbose, fps, false, 0);
         // grid 1 (5.29 s): the first take may not be lost to wandering; grid 2 (25.45 s): all four in one sweep
         bool ok = !r.caught && (w ? (r.taken == 4 && r.moves <= 12) : (r.taken >= 2 && r.value >= 42));
         printf("regression grid %d @%.0ffps: %s taken=%d value=%.1f moves=%d left=%.1fs\n", w + 1, fps, ok ? "ok" : "FAIL", r.taken, r.value, r.moves, r.left / 1000);
+        bad += !ok;
+    }
+    for (double fps : {60.0, 30.0}) {
+        std::mt19937 rng(7);
+        Grid g = logged_grid3(); float possible = 26.9f;
+        Result r = run_grid(rng, g, possible, cfg, g_verbose, fps, false, 1);
+        bool ok = !r.caught && r.taken >= 4;
+        printf("regression grid 3 @%.0ffps: %s taken=%d value=%.1f moves=%d left=%.1fs\n", fps, ok ? "ok" : "FAIL", r.taken, r.value, r.moves, r.left / 1000);
         bad += !ok;
     }
     return bad;
@@ -212,11 +235,12 @@ int main(int argc, char** argv) {
     int runs = argc > 1 ? atoi(argv[1]) : 2000; unsigned seed = argc > 2 ? (unsigned)atoi(argv[2]) : 1;
     for (int i = 1; i < argc; i++) { if (!strcmp(argv[i], "-v")) g_verbose = true; if (!strncmp(argv[i], "-run=", 5)) { g_verbose = true; g_only = atoi(argv[i] + 5); } }
     int bad = regress();
-    struct Variant { const char* name; double fps; bool hitches, async, fair, game; } vs[] = {
+    struct Variant { const char* name; double fps; bool hitches; int async; bool fair, game; } vs[] = {
         {"game 60fps", 60, false, false, true, true}, {"game 30fps+hitches", 30, true, false, true, true},
-        {"game 45fps async", 45, true, true, true, true}, {"game omniscient", 60, false, false, false, true},
+        {"game 45fps async", 45, true, 2, true, true}, {"game 60fps deferred", 60, false, 1, true, true}, {"game omniscient", 60, false, false, false, true},
         {"slow 60fps+hitches", 60, true, false, true, false}, {"slow 30fps+hitches", 30, true, false, true, false},
-        {"slow 45fps async", 45, true, true, true, false},
+        {"slow 45fps async", 45, true, 2, true, false}, {"slow 60fps deferred", 60, true, 1, true, false},
+        {"slow deferred, no arrival on covered", 60, true, 3, true, false},
     };
     for (auto& v : vs) {
         std::mt19937 rng(seed);

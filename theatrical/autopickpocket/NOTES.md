@@ -84,6 +84,11 @@ UI events (registered in Init 0xED1D04):
   the nominal speed (an overstated sample used to slow the mod down and could cost the exit). A command
   counts as accepted only when the movie raises its hint; if hints arrive late, a command waits up to
   150 ms and 3 ticks, and a hint that turns up after that is still credited.
+* 1.0.1: in the game (round 2 and the 2026-10-17 log) the UI's hints arrive just after `CallFunction`
+  returns, not during it, so every refused early move waited the full 150 ms pending time (steps took about
+  500 ms against 340 nominal) and no step was ever measured. Now, when hints come after the call, the next
+  move waits for the arrival hint (close / uncover / take, visible and enabled) on the exit and on slots with
+  an item, and is tried at the expected step time elsewhere. The arrival hint also times each step.
 * Fair mode (default): covered items are unknown until uncovered (their cost and value are estimated
   from what is visible).
 
