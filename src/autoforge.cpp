@@ -83,6 +83,7 @@ static Bounds bounds(){  // same lerp the game uses in 0x8587B4
 static const char* wptag(){ uintptr_t w=wp(); if(!w) return ""; uintptr_t d=F<uintptr_t>(w,0x18); if(!d) return ""; const char* t=F<const char*>(d,0x18); return t? t:""; }
 static bool is2d(const Bounds& b){ return (b.y1-b.y0)>0.05f && strcmp(wptag(),"sword")!=0; }  // swords (short+long) sweep along the blade
 static const char* wpid(){ uintptr_t w=wp(); if(!w) return "?"; uintptr_t d=F<uintptr_t>(w,0x18); if(!d) return "?"; const char* s=F<const char*>(d,0x08); return s? s:"?"; }
+static const char* recipeId(uintptr_t m){ const char* r=F<const char*>(m,8); return (r && kc::readable((uintptr_t)r,1))? r : "?"; }   // model+8 (0x11A08B8)
 
 // ---------------- tunables (conservative v1) ----------------
 static const float ZONE_TARGET=1280.f;     // heat every zone to this before going to the anvil
@@ -323,6 +324,7 @@ static void start(){
     if(!strcmp(wpid(),"horseshoe")){ g_path=HORSESHOE; g_pn=(int)(sizeof HORSESHOE/sizeof HORSESHOE[0]); logf("using seeded horseshoe path (%d spots)",g_pn); }
     Bounds b=bounds(); g_2d=is2d(b);
     char z[64]; logzones(z,sizeof z);
+    logf("recipe=%s",recipeId(g_m));
     logf("START piece=%s zones=[%s] bounds=(%.2f,%.2f)-(%.2f,%.2f) %s st=%d comp=%.3f q=%.3f stam=%.0f",wpid(),z,b.x0,b.y0,b.x1,b.y1,g_2d?"2D":"1D",st(),comp(),qual(),stamina());
     int s=st();
     if(s==ST_FORGE) setph(Heat,"start at forge");
@@ -464,12 +466,27 @@ static void tick(float dt){
     }
 }
 
+// [Options] WatchForge=1: read-only research log for a future auto-loop option.  Logs every change of the forge
+// state (1 = recipe menu, 2 = recipe chosen, 4.. = piece in progress, 21/22 = leaving), the model and the recipe id
+// (CryString at model+8), so a test shows what the game does after a quench.  Reads only; changes nothing.
+static bool g_watch=false; static uintptr_t g_wBs=0, g_wM=0; static int g_wSt=-1, g_wHard=-1; static uint64_t g_wT0=0;
+static void watch(uintptr_t bs,uintptr_t m){
+    if(!m) return;
+    int s=F<uint8_t>(m,M_STATE), h=F<uint8_t>(m,M_HARD);
+    if(bs==g_wBs && m==g_wM && s==g_wSt && h==g_wHard) return;
+    uint64_t now=g_clock(); if(!g_wT0) g_wT0=now;
+    logf("watch +%.1fs: state %d -> %d  hard %d -> %d  bs %s  model %s  recipe=%s  workpiece=%s  phase=%s",(now-g_wT0)/1000.0,
+        g_wSt,s,g_wHard,h, bs==g_wBs?"same":"NEW", m==g_wM?"same":"NEW", recipeId(m), F<uintptr_t>(m,M_WP)?"yes":"none", PN[g_ph]);
+    g_wBs=bs; g_wM=m; g_wSt=s; g_wHard=h;
+}
+
 static void UpdateHook(void* self,float dt){
     pOrigUpdate(self,dt);
     if(g_dead) return;
     uintptr_t bs=(uintptr_t)self;
     __try{
         uintptr_t m=F<uintptr_t>(bs,BS_MODEL);
+        if(g_watch) watch(bs,m);
         if(bs!=g_bs||m!=g_m){ if(g_ph!=Idle) logf("session changed -> idle"); g_ph=Idle; g_bs=bs; g_m=m; }
         if(m) tick(dt);
     }__except(EXCEPTION_EXECUTE_HANDLER){ logf("exception in tick (phase %s)",PN[g_ph]); g_ph=Idle; }
@@ -505,9 +522,10 @@ static DWORD WINAPI Init(LPVOID){
     kc::init(g_self,"kcd2_autoforge");
     g_key.vk=kc::ini_key("Forge",VK_F9);
     g_flipAtPct=std::min(95,std::max(0,kc::ini_int("Options","FlipAt",50)));
+    g_watch=kc::ini_int("Options","WatchForge",0)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v1.1.2 (game ts 0x%08X) flip at %d%%",R.im.timestamp,g_flipAtPct);
+    logf("start v1.1.3-test (game ts 0x%08X) flip at %d%%%s",R.im.timestamp,g_flipAtPct,g_watch?", forge watch on (read-only)":"");
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pWorkMap=f.workmap;
