@@ -80,7 +80,7 @@ MODS = [
              '; how fast Henry plays, in percent (50 = slower and more deliberate, 200 = brisk)\nSpeedPercent=100\n'
              '; how boldly he plays, in percent (above 100 he presses on more, below 100 he banks sooner)\nRiskPercent=100\n' + DEBUG),
     dict(th('autopickpocket'), folder='theatrical_autopickpocket', title='Theatrical AutoPickpocket', zip='TheatricalAutoPickpocket',
-         dll='kcd2_autopickpocket.dll', data=[], ver='1.0.0', key='Toggle',
+         dll='kcd2_autopickpocket.dll', data=[], ver='1.0.1', key='Toggle',
          desc="Henry pickpockets with the game's own inputs: lets go of the charge at a safe moment and plays the item grid, keeping every risk. [ toggles.",
          ini='[Keys]\n' + KEYHELP + 'Toggle=[\n\n'
              '[Options]\n'
