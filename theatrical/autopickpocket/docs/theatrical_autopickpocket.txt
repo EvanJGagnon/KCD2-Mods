@@ -1,4 +1,4 @@
-THEATRICAL AUTOPICKPOCKET 1.0.0 - Kingdom Come: Deliverance II
+THEATRICAL AUTOPICKPOCKET 1.0.1 - Kingdom Come: Deliverance II
 by Flubbermunchkin
 
 Henry pickpockets for you, the way a careful thief would, with the game's own controls. You still sneak
@@ -75,6 +75,11 @@ LICENSE
   GNU GPL v3 (LICENSE.txt).
 
 CHANGES
+  1.0.1  - Turns the selector as soon as the game lets it. On some setups the game reports a move a moment
+           after it is made, and the mod then waited about 0.15 s after every move it tried too early; on a
+           short pickpocket that lost about a second, so an item near the end of the route no longer fit.
+           It now waits for the selector to stop where the game says so, and also learns the real selector
+           speed, so the route it plans is the route it can walk.
   1.0.0  - First release (the 0.2.1 test build, unchanged in play).
   0.2.1  - The on/off message shows real text instead of "@tap_on". Log lines list the planned route
            with spaces. No change to how the mod plays.
