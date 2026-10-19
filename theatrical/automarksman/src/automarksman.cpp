@@ -487,22 +487,28 @@ static int actor_kind(uintptr_t actor) {
     return -1;
 }
 
-// Aim point on an actor's entity, plus whether it is a person or an animal (by the shape of its box).
-static bool aim_point(uintptr_t ent, V3& out, bool& animal, float* dims = nullptr, bool* bone = nullptr, bool useBone = true) {
+// Aim point on an actor's entity, plus whether it is an animal.  kind (actor_kind) decides person or animal when it
+// is known; only an unknown class falls back to the shape of the box.  A person lying down (asleep) has a long,
+// low box like an animal's: it still gets the head bone, and without one the middle of the body, never the box's
+// "animal" chest estimate, which follows the entity's forward axis and lands on a sleeper's feet.
+static bool aim_point(uintptr_t ent, V3& out, bool& animal, float* dims = nullptr, bool* bone = nullptr, bool useBone = true, int kind = -1) {
     if (!kc::is_a(ent, G.vtEntity)) return false;
     float b[6] = {0}; G.bounds((void*)ent, b);
     V3 mn{b[0], b[1], b[2]}, mx{b[3], b[4], b[5]};
     float h = mx.z - mn.z, lx = mx.x - mn.x, ly = mx.y - mn.y;
     if (!(h > 0.1f && h < 6.f && lx > 0.f && lx < 8.f && ly > 0.f && ly < 8.f)) return false;
     V3 fwd{F<float>(ent, E_TM + 0x04), F<float>(ent, E_TM + 0x14), F<float>(ent, E_TM + 0x24)};   // column 1
-    animal = std::max(lx, ly) > 1.25f * h;
-    out = mk::vital_point(mn, mx, fwd, g_headDrop);
+    bool longBox = std::max(lx, ly) > 1.25f * h;
+    animal = kind < 0 ? longBox : kind != mk::K_PERSON;
+    bool lying = !animal && longBox;
+    out = lying ? mk::lying_point(mn, mx) : mk::vital_point(mn, mx, fwd, g_headDrop);
     bool usedBone = false;
     g_boneWhy = -1;
     if (!animal && g_headBone && useBone) {      // the head bone, if it is plausibly on this body (else keep the box estimate)
         V3 hb; int why = 0;
         if (head_bone(ent, hb, &why, &g_boneInfo)) {
-            bool inside = hb.x > mn.x - 0.5f && hb.x < mx.x + 0.5f && hb.y > mn.y - 0.5f && hb.y < mx.y + 0.5f && hb.z > mn.z + 0.3f * h && hb.z < mx.z + 0.35f;
+            float lowest = lying ? mn.z - 0.2f : mn.z + 0.3f * h;   // a sleeper's head can be as low as the box's floor
+            bool inside = hb.x > mn.x - 0.5f && hb.x < mx.x + 0.5f && hb.y > mn.y - 0.5f && hb.y < mx.y + 0.5f && hb.z > lowest && hb.z < mx.z + 0.35f;
             if (inside) { out = hb; usedBone = true; } else why = 100;     // 100: outside the body's box
         }
         g_boneWhy = why; g_boneAt = hb;
@@ -574,9 +580,9 @@ static mk::Lock::Why pick(const V3& camPos, const V3& camFwd, bool handsOn) {
     for (void* a; (a = G.iterNext(it)) != nullptr && seen < 4096 && n < 256; seen++) {
         uintptr_t actor = (uintptr_t)a; if (actor == g_player) continue;
         uintptr_t ent = F<uintptr_t>(actor, A_ENTITY); if (!ent) continue;
-        V3 p; bool boxAnimal;
-        if (!aim_point(ent, p, boxAnimal, nullptr, nullptr, false)) continue;   // the box is enough to choose
-        int kind = actor_kind(actor); if (kind < 0) kind = boxAnimal ? mk::K_ANIMAL : mk::K_PERSON;
+        V3 p; bool boxAnimal; int kind = actor_kind(actor);
+        if (!aim_point(ent, p, boxAnimal, nullptr, nullptr, false, kind)) continue;   // the box is enough to choose
+        if (kind < 0) kind = boxAnimal ? mk::K_ANIMAL : mk::K_PERSON;
         V3 r = p - camPos; float d = r.len();
         if (d < 2.f || d > g_maxDist) continue;
         float ang = mk::angle_between(r, camFwd);
@@ -638,7 +644,7 @@ static float seg_dist(const V3& a, const V3& b, const V3& q) {
 static bool target_point(uint32_t id, V3& p) {
     uintptr_t as = actor_system(); void* a = as && id ? G.getActor((void*)as, id) : nullptr;
     uintptr_t ent = a ? F<uintptr_t>((uintptr_t)a, A_ENTITY) : 0; bool animal;
-    return ent && aim_point(ent, p, animal);
+    return ent && aim_point(ent, p, animal, nullptr, nullptr, true, actor_kind((uintptr_t)a));
 }
 
 // After the flight: where the real arrow crossed the target's distance, against the head and against where the
@@ -827,8 +833,8 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
             if (id) {
                 uintptr_t as = actor_system(); void* a = as ? G.getActor((void*)as, id) : nullptr;
                 uintptr_t ent = a ? F<uintptr_t>((uintptr_t)a, A_ENTITY) : 0; V3 p; bool animal = false; float dims[3] = {0};
-                char nm[64]; bool bone = false; if (ent && aim_point(ent, p, animal, dims, &bone)) {
-                    int kind = actor_kind((uintptr_t)a);
+                char nm[64]; bool bone = false; int kind = ent ? actor_kind((uintptr_t)a) : -1;
+                if (ent && aim_point(ent, p, animal, dims, &bone, true, kind)) {
                     logf("target%s: %s (%s%s) %.1f m away at (%.2f %.2f %.2f), %.1f deg from the centre, box %.2f x %.2f x %.2f m",
                          why == mk::Lock::SWITCHED ? " (switched)" : "", ent_name(ent, nm, sizeof nm), kind < 0 ? (animal ? "animal?" : "person?") : mk::kind_name(kind),
                          animal ? ": chest" : bone ? ": head bone" : ": head from box", (p - camPos).len(), p.x, p.y, p.z, mk::deg(mk::angle_between(p - camPos, camFwd)), dims[0], dims[1], dims[2]);
@@ -842,7 +848,7 @@ static void steer(double now, float dt, uintptr_t look, const V3& camPos, const 
     if (!g_lock) return;
     uintptr_t as = actor_system(); void* a = as ? G.getActor((void*)as, g_lock) : nullptr;
     uintptr_t ent = a ? F<uintptr_t>((uintptr_t)a, A_ENTITY) : 0; V3 tp; bool animal, bone = false;
-    if (!ent || !aim_point(ent, tp, animal, nullptr, &bone)) { g_lock = 0; g_lockState.id = 0; return; }
+    if (!ent || !aim_point(ent, tp, animal, nullptr, &bone, true, actor_kind((uintptr_t)a))) { g_lock = 0; g_lockState.id = 0; return; }
     if (g_lockHasPrev && dt > 0.f) { V3 v = (tp - g_lockPrev) * (1.f / dt); if (v.len() < 15.f) g_lockVel = g_lockVel + (v - g_lockVel) * std::min(1.f, dt * 6.f); }
     else g_lockVel = V3{};
     g_lockPrev = tp; g_lockHasPrev = true;

@@ -272,6 +272,8 @@ int main() {
         V3 d = vital_point(V3{-0.3f, -0.8f, 0}, V3{0.3f, 0.8f, 1.2f}, V3{0, 1, 0}, 0.13f);
         check(std::fabs(h.z - 1.67f) < 1e-3f && std::fabs(h.y) < 1e-3f, "person: head 13 cm below the top of the box");
         check(d.y > 0.4f && d.z > 0.7f && d.z < 0.9f, "deer-shaped box: chest/neck ahead of the centre");
+        V3 s = lying_point(V3{-0.4f, -1.0f, 0.5f}, V3{0.4f, 1.0f, 1.0f});   // a sleeper on a bed, either way round
+        check(std::fabs(s.y) < 1e-3f && std::fabs(s.z - 0.875f) < 1e-3f, "lying person: middle of the body, not an end");
     }
     printf("10. round 1 report: strong bow (82 m/s), first-shot guess 55 m/s\n");
     {

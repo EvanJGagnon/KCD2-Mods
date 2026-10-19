@@ -372,5 +372,12 @@ inline V3 vital_point(const V3& bmin, const V3& bmax, const V3& fwd, float headD
     }
     return {c.x, c.y, bmax.z - std::min(headDrop, 0.4f * h)};
 }
+// A person lying down (asleep, knocked out) without a head bone: the box is long and low and nothing says which
+// end is the head (the entity's forward axis can point at the feet), so aim at the middle of the body, near the
+// top of the box - the chest or belly, never an end.
+inline V3 lying_point(const V3& bmin, const V3& bmax) {
+    V3 c = (bmin + bmax) * 0.5f;
+    return {c.x, c.y, bmin.z + 0.75f * (bmax.z - bmin.z)};
+}
 
 }  // namespace mk
