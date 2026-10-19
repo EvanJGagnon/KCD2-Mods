@@ -235,14 +235,14 @@ static float g_lastYaw = 0, g_lastPitch = 0; static bool g_haveLast = false;
 static float g_wrX = 0, g_wrZ = 0;                              // what the mod last put into m_lookAngleAccum
 static float g_errStart = 0; static int g_errFrames = 0;        // "does the camera follow?" check
 static const char* volatile g_notice = nullptr;
-// KCD2 SendInfoText resolves @localization_keys. Plain text produces stray '@' in the HUD.
-// The corresponding keys live in Localization/*_xml.pak (all supported game languages).
+// Plain text (false = not a localization key), like AutoPickpocket and AutoFollow: the mod's own
+// @tam_* keys are not resolved in game, so they showed up raw as "@tam_on" etc.
 // Notices can still be suppressed by Notices=0, without affecting F4 or targeting.
 static bool g_notices = true;
-static const char* const NOTICE_ON   = "Game.SendInfoText(\"@tam_on\", true)";
-static const char* const NOTICE_OFF  = "Game.SendInfoText(\"@tam_off\", true)";
-static const char* const NOTICE_BOW  = "Game.SendInfoText(\"@tam_bow_measured\", true)";
-static const char* const NOTICE_FIRST= "Game.SendInfoText(\"@tam_first_arrow\", true)";
+static const char* const NOTICE_ON   = "Game.SendInfoText(\"AutoMarksman: ON (F4)\", false)";
+static const char* const NOTICE_OFF  = "Game.SendInfoText(\"AutoMarksman: OFF (F4)\", false)";
+static const char* const NOTICE_BOW  = "Game.SendInfoText(\"AutoMarksman: bow measured\", false)";
+static const char* const NOTICE_FIRST= "Game.SendInfoText(\"AutoMarksman: first arrow calibrates your bow\", false)";
 // Crossbow diagnostic captures the actual, unmodified firing-pose direction even when
 // nothing is targeted. It does not alter the camera, weapon skeleton or projectile.
 static bool g_crossbowDiag = false;
