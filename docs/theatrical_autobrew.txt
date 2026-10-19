@@ -54,7 +54,10 @@ KNOWN ISSUES AND LIMITATIONS
     the pot to boil before turning it; this has not affected quality in testing.
   - If the brew is interrupted (you leave the table, open a menu, get attacked), the mod stops;
     finish by hand or reset the table and start again.
-  - Mods that change the alchemy minigame or recipes may not be compatible.
+  - Not compatible with mods that change alchemy recipes, such as Easy Alchemy. The mod brews
+    each recipe the way the unmodded game writes it (grinding, boiling, distilling), so a recipe
+    that another mod has changed comes out as a failed brew, and a failed gunpowder brew can
+    explode. Remove the recipe mod to use this one.
 
 GAME UPDATES
   The mod does not use fixed memory addresses. At startup it finds the game code it needs by
