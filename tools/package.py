@@ -45,7 +45,7 @@ MODS = [
          ini='[Keys]\n' + KEYHELP + 'Forge=F9\n\n[Options]\n'
              '; turn the piece over once at this % completion, like a smith would (0 = only when a side is worked out)\nFlipAt=0\n' + DEBUG),
     dict(folder='theatrical_autobrew', title='Theatrical Autobrew', zip='TheatricalAutobrew', dll='kcd2_alchemy.dll', data=['alch_recipes.txt'],
-         desc='Henry brews the open recipe step by step, in real time (F8). An adaptation of Autobrew by JerryYOJ.', ver='1.0.2', key='Brew',
+         desc='Henry brews the open recipe step by step, in real time (F8). An adaptation of Autobrew by JerryYOJ.', ver='1.0.3', key='Brew',
          ini='[Keys]\n' + KEYHELP + 'Brew=F8\n\n[Options]\n' + DEBUG),
     dict(folder='horse_route_follow', title='Horse Route Follow', zip='HorseRouteFollow', dll='kcd2_autotravel.dll',
          data=['trosecko.amg', 'kutnohorsko.amg', 'klaster.amg'],

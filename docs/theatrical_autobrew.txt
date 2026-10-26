@@ -1,4 +1,4 @@
-THEATRICAL AUTOBREW 1.0.2 - Kingdom Come: Deliverance II
+THEATRICAL AUTOBREW 1.0.3 - Kingdom Come: Deliverance II
 by Flubbermunchkin - an adaptation of Autobrew by JerryYOJ
 
 Open a recipe in the alchemy book, press F8, and Henry brews it - visibly, step by step, in real
@@ -50,8 +50,8 @@ KNOWN ISSUES AND LIMITATIONS
   - Only tested with the Steam version of the game (1.5.x, build 15693).
   - Brews one batch per key press (no looping).
   - Recipes with steps the mod cannot perform are refused (see the log).
-  - Each boiling turn takes slightly longer than the hourglass itself, because the mod waits for
-    the pot to boil before turning it; this has not affected quality in testing.
+  - The pot can come off the fire a moment before the sand has fully run out: the mod times
+    each turn by the game's boil timer, which is what the recipe is judged on.
   - If the brew is interrupted (you leave the table, open a menu, get attacked), the mod stops;
     finish by hand or reset the table and start again.
   - Mods that change the alchemy minigame or recipes may not be compatible.
@@ -76,6 +76,11 @@ LICENSE
   ported Autobrew parts, is available as a separate download on the Nexus page.
 
 CHANGES
+  1.0.3  - Boil turns now last exactly as long as the recipe asks. Each turn ends on the
+           game's own boil timer instead of when the sand runs out; waiting for the sand
+           added 2-4 s per turn, so exact-time steps failed (for example the dandelion in
+           Buck's Blood) and potions came out below the quality they should reach.
+         - On a strong boil Henry now turns the sandglass first, then works the bellows.
   1.0.2  - The key setting now accepts symbol keys such as ] or [; a key value the mod
            does not understand is reported in the log instead of silently using the default.
   1.0.1  - Improved ingredient quality handling and diagnostics.

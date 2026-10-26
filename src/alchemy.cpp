@@ -6,8 +6,10 @@
 // Projects/Autobrew/src/core/Executor.cpp BuildPlan + tasks/Tick/Tick.cpp.  Differences:
 //   * natives are found by byte signature / RTTI at startup (kcd2_common.h), no address library;
 //   * recipe conditions come from alch_recipes.txt (generated offline from AlchemyRecipe.xml);
-//   * boiling is theatrical: every recipe turn = one native TurnSandglass verb, then the pot
-//     stays on the fire until the game's own sand level (C_Alchemy+0x338) has run from full to 0;
+//   * boiling is theatrical: every recipe turn = one native TurnSandglass verb (on a strong turn
+//     before the bellows), but the turn ends on the game's own boil timer (the pot's base record),
+//     as in Autobrew.  Waiting for the sand (C_Alchemy+0x338) to run out instead overshot by
+//     2-4 s (turn and lift animations) and failed exact-time steps such as Buck's Blood's dandelion;
 //   * no deliberate-mistake engine, no looping.
 // Use: open a recipe page in the alchemy book, press F8 (kcd2_alchemy.ini).  F8 again stops.
 // Log: kcd2_alchemy.log next to the DLL.
@@ -278,6 +280,12 @@ static Phase    g_phase=Idle;
 static uint32_t g_recipeId=0;
 static std::vector<Op> g_plan; static size_t g_cur=0; static int g_sub=0;
 static uint64_t g_t=0, g_stall=0;
+static float    g_boilBase=0;          // SandTurn: the pot's weak/strong boil seconds when the op started
+// One recipe turn = the HourglassTimeout RPG param (10 s), the unit of the game's boil check.  The
+// leads come off the last turn of a window (Autobrew's values): the pot keeps boiling until the
+// lift animation starts, and before a strong window the first bellows pull still boils weak.
+static const float TURN_S=10.0f, STOP_LEAD_S=0.5f, PRE_STRONG_LEAD_S=1.5f;
+static const uint64_t SAND_GRACE_MS=2000;   // strong turn: bellows without the sandglass if it can't be turned
 static kc::Hotkey g_key;
 static int      g_insane=0; static bool g_dead=false;
 static const uint64_t STALL_ABORT_MS=12000;
@@ -343,7 +351,7 @@ static void tick(void* alc){
     case Cooking: {
         if(g_cur>=g_plan.size()){ logf("brew finished (recipe %u)",g_recipeId); to_idle(nullptr); break; }
         Op& op=g_plan[g_cur];
-        bool sand=op.k==Op::SandTurn && g_sub>=1;
+        bool sand=op.k==Op::SandTurn;   // timed off the boil timer, through the sandglass/bellows animations
         if(verbBusy && !sand){ g_stall=now; break; }
         if(mode!=MODE_BREWING && !sand){ if(now-g_stall>STALL_ABORT_MS) to_idle("brewing interrupted"); break; }
         bool adv=false, prog=false;
@@ -368,35 +376,37 @@ static void tick(void* alc){
             if(pCanPerformVerb(alc,MovePotBack)){ pPerformVerb(alc,MovePotBack); prog=true; }
             break; }
         case Op::SandTurn: {
-            float s=F<float>(alc,O_SAND);
-            if(g_sub==0){                                   // wait for the boil ("when you hear it bubbling"), then flip
-                int boil=F<uint8_t>(alc,O_BOILSTATE);       // 0 heating, 1 weak boil, 2 strong boil
-                int want=op.strong?2:1;
-                if(!F<uint8_t>(alc,O_POTONFIRE) && !F<uint8_t>(alc,O_POTMOVING)){ to_idle("pot left the fire"); return; }
-                if(op.strong && boil<2){ F<int>(alc,O_PENDING)=UseBellows; prog=true; break; }   // work the bellows up to a strong boil
-                if(boil!=want){ prog=true; break; }        // still heating
-                if(s<=0.0001f && pCanPerformVerb(alc,TurnSandglass)){ pPerformVerb(alc,TurnSandglass); g_sub=1; g_t=now; KC_DLOG("sandglass turn (%s) at boil %d",op.strong?"strong":"weak",boil); }
-                else prog=true;
-                break;
-            }
-            if(g_sub==1){                                   // wait for the sand to start running
-                if(s>0.05f){ g_sub=2; prog=true; }
-                else if(now-g_t>8000){ to_idle("sandglass did not turn"); return; }
-                else prog=true;
-                break;
-            }
-            // g_sub==2: sand running; the pot must stay on the fire
+            // g_sub 0: op start, 1: waiting to turn the sandglass, 2: sandglass turned (or skipped).
+            // The turn ends on the game's boil timer, so the sand may still be running at the lift.
+            void* base=pot_base_record(alc);
+            if(!base){ to_idle("no base liquid in the pot"); return; }
             if(!F<uint8_t>(alc,O_POTONFIRE) && !F<uint8_t>(alc,O_POTMOVING)){ to_idle("pot left the fire"); return; }
-            if(op.strong){                                  // keep the heat up with the bellows (Autobrew's rule)
-                float remaining=s*10.0f + 10.0f*op.strongAfter;
-                float charge=(F<float>(alc,O_FIRE)-1.0f)*6.0f;
+            float s=F<float>(alc,O_SAND);
+            float boiled=F<float>(base,op.strong?0x18:0x14);
+            if(g_sub==0){ g_boilBase=boiled; g_t=now; g_sub=1; }
+            float done=boiled-g_boilBase;
+            if(g_sub==1){                                   // weak: flip at the boil ("when you hear it bubbling");
+                int boil=F<uint8_t>(alc,O_BOILSTATE);       //   strong: flip first, then the bellows.  0 heating, 1 weak, 2 strong
+                bool ready=op.strong || boil>=1;
+                if(ready && s<=0.0001f && pCanPerformVerb(alc,TurnSandglass)){
+                    pPerformVerb(alc,TurnSandglass); g_sub=2;
+                    KC_DLOG("sandglass turn (%s) at boil %d, %.1fs boiled",op.strong?"strong":"weak",boil,done);
+                } else if(op.strong && (s>0.0001f || now-g_t>SAND_GRACE_MS)) g_sub=2;   // sand still running from the
+            }                                                                          //   previous turn: bellows now
+            if(op.strong && g_sub==2){                      // keep the heat up with the bellows (Autobrew's rule)
+                float remaining=TURN_S-done + TURN_S*op.strongAfter;
+                float charge=(F<float>(alc,O_FIRE)-1.0f)*6.0f;   // fire intensity drains 1/6 per s down to 1.0
                 if(remaining>charge) F<int>(alc,O_PENDING)=UseBellows;
                 else if(F<int>(alc,O_PENDING)==UseBellows) F<int>(alc,O_PENDING)=VNone;
             }
-            if(s<=0.0001f){                                 // sand ran out: turn complete
-                if(F<int>(alc,O_PENDING)==UseBellows && op.strongAfter==0) F<int>(alc,O_PENDING)=VNone;
+            const Op* next=g_cur+1<g_plan.size()? &g_plan[g_cur+1] : nullptr;
+            float lead = next && next->k==Op::SandTurn ? (next->strong && !op.strong? PRE_STRONG_LEAD_S : 0.0f) : STOP_LEAD_S;
+            if(done>=TURN_S-lead){                          // the turn's boil time is in: next turn or lift the pot
+                if(op.strong && op.strongAfter==0 && F<int>(alc,O_PENDING)==UseBellows) F<int>(alc,O_PENDING)=VNone;
+                KC_DLOG("turn done (%s): %.1fs boiled, sand %.2f",op.strong?"strong":"weak",done,s);
                 adv=true;
-            } else prog=true;
+            } else if(now-g_t>(uint64_t)(3*TURN_S*1000)+30000){ to_idle("pot did not boil"); return; }
+            else prog=true;
             break; }
         }
         if(adv){ g_cur++; g_sub=0; g_stall=now; }
@@ -447,7 +457,7 @@ static DWORD WINAPI Init(LPVOID){
     g_key.vk=kc::ini_key("Brew",VK_F8);
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v1.0.2 (game ts 0x%08X)",R.im.timestamp);
+    logf("start v1.0.3 (game ts 0x%08X)",R.im.timestamp);
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pPerformVerb=(PerformVerb_t)f.perform; pCanPerformVerb=(CanPerformVerb_t)f.can;
@@ -463,5 +473,5 @@ static DWORD WINAPI Init(LPVOID){
     char kn[16]; logf("ready (%s on a recipe page)",kc::key_name(g_key.vk,kn,sizeof kn));
     return 0;
 }
-KC_PLUGIN("Theatrical Autobrew", KC_AUTHOR, 102)
+KC_PLUGIN("Theatrical Autobrew", KC_AUTHOR, 103)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){ if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); } return TRUE; }
