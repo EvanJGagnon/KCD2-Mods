@@ -45,6 +45,9 @@ enum { ST_TOFORGE=5, ST_TOANVIL=6, ST_HARDEN=7, ST_FORGE=8, ST_ANVIL=11, ST_FLIP
 enum { A_TOANVIL=0, A_TOFORGE=1, A_TOHARDEN=2, A_BELLOWS=4, A_MOVEHAMMER=5, A_FLIP=6, A_STARTSTROKE=7, A_FINISHSTROKE=8, A_SETZONE=9 };
 
 static uintptr_t g_bs=0, g_m=0;
+// batch state ([Options] Queue=1; see the recipe page section below)
+static char g_batchRecipe[96]={0}; static int g_batchTotal=0, g_batchLeft=0; static bool g_batchAuto=false;
+static void batch_cancel(const char* why); static void batch_quenched();
 static void** actvt(){ return *(void***)(g_bs+BS_ACTIONS); }
 static void* actthis(){ return (void*)(g_bs+BS_ACTIONS); }
 static void act0(int s){ ((void(*)(void*))actvt()[s])(actthis()); }
@@ -83,6 +86,7 @@ static Bounds bounds(){  // same lerp the game uses in 0x8587B4
 static const char* wptag(){ uintptr_t w=wp(); if(!w) return ""; uintptr_t d=F<uintptr_t>(w,0x18); if(!d) return ""; const char* t=F<const char*>(d,0x18); return t? t:""; }
 static bool is2d(const Bounds& b){ return (b.y1-b.y0)>0.05f && strcmp(wptag(),"sword")!=0; }  // swords (short+long) sweep along the blade
 static const char* wpid(){ uintptr_t w=wp(); if(!w) return "?"; uintptr_t d=F<uintptr_t>(w,0x18); if(!d) return "?"; const char* s=F<const char*>(d,0x08); return s? s:"?"; }
+static const char* recipeId(uintptr_t m){ const char* r=F<const char*>(m,8); return (r && kc::readable((uintptr_t)r,1))? r : "?"; }   // model+8 (0x11A08B8)
 
 // ---------------- tunables (conservative v1) ----------------
 static const float ZONE_TARGET=1280.f;     // heat every zone to this before going to the anvil
@@ -323,6 +327,8 @@ static void start(){
     if(!strcmp(wpid(),"horseshoe")){ g_path=HORSESHOE; g_pn=(int)(sizeof HORSESHOE/sizeof HORSESHOE[0]); logf("using seeded horseshoe path (%d spots)",g_pn); }
     Bounds b=bounds(); g_2d=is2d(b);
     char z[64]; logzones(z,sizeof z);
+    logf("recipe=%s",recipeId(g_m));
+    g_batchAuto=false;
     logf("START piece=%s zones=[%s] bounds=(%.2f,%.2f)-(%.2f,%.2f) %s st=%d comp=%.3f q=%.3f stam=%.0f",wpid(),z,b.x0,b.y0,b.x1,b.y1,g_2d?"2D":"1D",st(),comp(),qual(),stamina());
     int s=st();
     if(s==ST_FORGE) setph(Heat,"start at forge");
@@ -333,8 +339,14 @@ static void start(){
 static void tick(float dt){
     uint64_t now=g_clock();
     bool pressed=g_key.pressed();
-    if(pressed){ if(g_ph==Idle) start(); else stop("user key"); return; }
-    if(g_ph==Idle) return;
+    if(pressed){ if(g_ph==Idle) start(); else { stop("user key"); batch_cancel("stopped with the key"); } return; }
+    if(g_ph==Idle){
+        int s0=st();
+        if(g_batchAuto && F<uintptr_t>(g_m,M_WP) && (s0==ST_FORGE||s0==ST_ANVIL)){
+            logf("batch: forging piece %d of %d %s",g_batchTotal-g_batchLeft+1,g_batchTotal,g_batchRecipe); start();
+        }
+        return;
+    }
     int s=st(); float c=comp();
     {   // sanity: values the mod relies on must look like the build it was made for
         float f=fire(), q=qual();
@@ -456,12 +468,187 @@ static void tick(float dt){
         if(s==ST_FINIDLE && inPh>3000 && !g_t){ act0(A_TOHARDEN); g_t=now; logf("nudged ToHardening"); }
         // completion reads 0.999x but the game only finishes at 100%: the piece is still on the idle anvil -> one more stroke
         if((s==ST_ANVIL||s==ST_FINISHSTROKE) && inPh>2500 && !g_t){ logf("not finished at comp=%.4f -> one more stroke",c); g_oneMore=true; g_sub=Ready; g_lastStart=0; setph(Work,"not finished yet"); }
-        if(h==2 && g_t!=2){ g_t=2; logf("quench reached: q=%.3f",qual()); stop("done (confirm the result yourself)"); }
+        if(h==2 && g_t!=2){ g_t=2; logf("quench reached: q=%.3f",qual()); stop("done (confirm the result yourself)"); batch_quenched(); }
         if(inPh>60000) stop("finish timeout");
         break;
     }
     default: break;
     }
+}
+
+// [Options] WatchForge=1: read-only research log for a future auto-loop option.  Logs every change of the forge
+// state (1 = recipe menu, 2 = recipe chosen, 4.. = piece in progress, 21/22 = leaving), the model and the recipe id
+// (CryString at model+8), so a test shows what the game does after a quench.  Reads only; changes nothing.
+static bool g_watch=false; static uintptr_t g_wBs=0, g_wM=0; static int g_wSt=-1, g_wHard=-1; static uint64_t g_wT0=0;
+static void watch(uintptr_t bs,uintptr_t m){
+    if(!m) return;
+    int s=F<uint8_t>(m,M_STATE), h=F<uint8_t>(m,M_HARD);
+    if(bs==g_wBs && m==g_wM && s==g_wSt && h==g_wHard) return;
+    uint64_t now=g_clock(); if(!g_wT0) g_wT0=now;
+    logf("watch +%.1fs: state %d -> %d  hard %d -> %d  bs %s  model %s  recipe=%s  workpiece=%s  phase=%s",(now-g_wT0)/1000.0,
+        g_wSt,s,g_wHard,h, bs==g_wBs?"same":"NEW", m==g_wM?"same":"NEW", recipeId(m), F<uintptr_t>(m,M_WP)?"yes":"none", PN[g_ph]);
+    g_wBs=bs; g_wM=m; g_wSt=s; g_wHard=h;
+}
+
+// ---------------- [Options] Queue=1: forge a batch, chosen on the game's own recipe page ----------------
+// On the forge's recipe menu, + and - set how many of the shown recipe to make.  The game's own recipe page then
+// shows it: "[Hunting Sword] Common x2" with every required amount doubled.  The page data is the game's
+// C_UIFlashContentRecipeBlacksmith (built by 0x119F710 for the crafting page 0x119F030); we only change that display
+// copy after the game made it.  The owned counts on it are the game's own, so the most you can pick is what the
+// game says you can afford.  Recipe data, material checks and material use are not touched: each piece is still
+// picked and confirmed in the game's menu, which checks and takes the materials as usual.  Pieces of a batch are
+// forged without F9; after each quench the page shows how many are left for that recipe.
+static const char* SIG_PAGE = "48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC 70 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 F0 48 8B 41 08 4C 8B F9 41 8A D8 4C 8B E2 48 8B 88 90 00 00 00 4C 8B A9 68 06 00 00 E8 ?? ?? ?? ?? 45 32 F6 41 8A F6 84 DB 0F 85 ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? 49 8B D4 FF 50 10 4D 8B C5 48 8D 4D C0 48 8B D0 48 8B F0 E8 ?? ?? ?? ?? 48 8D 55 C0 48 8D 4D E0 E8 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? 48 8B D8 48 8D 4D B0 E8 ?? ?? ?? ?? 49 8D BF F0 01 00 00 4C 8B C3 48 8B CF 48 8D 55 B0 E8 ?? ?? ?? ?? 48 8D 4D B0 E8 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? 48 8D 4D B0 E8 ?? ?? ?? ??";   // 0x119F030 crafting page: show recipe (this, CryString id [callee frees], type 0 = blacksmith)
+static const char* SIG_PAGE_MAKE = "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 20 83 3D ?? ?? ?? ?? 00 49 8B F0 48 8B EA 48 8B F9 75 ?? E8 ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 8D 54 24 30 45 33 C0 41 8D 48 70 FF D0";   // 0x119F710 make_shared<C_UIFlashContentRecipeBlacksmith>(recipe, soul)
+static const char* SIG_PAGE_CTOR = "40 55 53 56 57 41 54 41 56 41 57 48 8D 6C 24 90 48 81 EC 70 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 60 48 8B 02 4C 8B E1 48 8B CA 4D 8B F0 4C 8B FA FF 50 08 48 8B D0 48 8D 4C 24 38 E8 ?? ?? ?? ?? 48 8B D8 49 8B CF 49 8B 07 FF 10 45 33 C0 48 8D 4C 24 20 48 8B D0 E8 ?? ?? ?? ?? 4C 8B C3 48 8B D0 49 8B CC E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 49 8D 4C 24 18 49 89 04 24 E8 ?? ?? ?? ?? 49 8D 4C 24 20 E8 ?? ?? ?? ?? 49 C7 44 24 28 00 00 00 00 49 C7 44 24 30 00 00 00 00 49 C7 44 24 38 00 00 00 00 49 C7 44 24 48 00 00 00 00 49 C7 44 24 50 00 00 00 00 49 C7 44 24 58 00 00 00 00 E8 ?? ?? ?? ?? 49 8B 07 49 8B CF FF 50 10 48 8B D0 49 8D 4C 24 18 E8 ?? ?? ?? ??";   // 0x119F7E8 page content ctor: name CryString +0x10, ingredient rows vector +0x48
+static const char* SIG_PAGE_ROWS = "E8 ?? ?? ?? ?? 48 8B 4E 08 48 8D 54 24 58 E8 ?? ?? ?? ?? 48 8B 13 48 8B CB 8B F8 FF 52 08 48 8B 76 10 48 8D 54 24 20 48 8D 4C 24 40 8B D8 E8 ?? ?? ?? ?? 48 8D 54 24 30 48 8D 4C 24 48 E8 ?? ?? ?? ?? 48 8B 56 50 4C 8D 44 24 40 89 7C 24 50 89 5C 24 54 48 3B 56 58 74 ?? E8 ?? ?? ?? ?? 48 83 46 50 18";   // 0x1F5BEC5 ingredient row {name, icon, owned +0x10, required +0x14}, 0x18 bytes
+static const uintptr_t PG_CALL=0x74, PG_STR=0x94, PG_STRFREE=0xB3, MK_CTOR=0x81, CT_ASSIGN=0xD8;   // call sites inside those functions
+static const uintptr_t PC_NAME=0x10, PC_ROWS=0x48, ROW_SIZE=0x18, ROW_OWNED=0x10, ROW_NEED=0x14;
+typedef void** (*MakeContent_t)(void**, uintptr_t, uintptr_t);
+typedef void (*ShowPage_t)(uintptr_t, void*, uint8_t);
+typedef void (*StrFromC_t)(void*, const char*);
+typedef void (*StrFree_t)(void*);
+typedef void (*StrAssign_t)(void*, const void*);
+static MakeContent_t pMakeContent=nullptr; static ShowPage_t pShowPage=nullptr;
+static StrFromC_t pStrFromC=nullptr; static StrFree_t pStrFree=nullptr; static StrAssign_t pStrAssign=nullptr;
+static volatile uintptr_t* g_pageSlot=nullptr;    // the hook stub stores the page object (r15 in 0x119F030) here
+static bool g_queue=false;
+static uint64_t g_menuSeen=0;                     // last tick the forge showed its recipe menu (state 1)
+static uintptr_t g_pageObj=0, g_pageVt=0;         // crafting page that showed the current recipe
+static char g_pageRecipe[96]={0}; static int g_pageQty=1, g_pageCap=0;
+static char g_pageLog[400]={0};
+static kc::Hotkey g_plus, g_minus, g_padPlus, g_padMinus;
+static int g_lastSt=-1;
+
+static const char* cstr(uintptr_t cryString){ const char* s=cryString? *(const char**)cryString : nullptr; return (s && kc::readable((uintptr_t)s,1))? s : "?"; }
+static bool page_open(){ return g_menuSeen && g_clock()-g_menuSeen<1500; }
+
+// Runs right after the game built the recipe page data, before the game sends it to the page.
+static void page_content(uintptr_t obj, uintptr_t content, uintptr_t recipe){
+    if(!content || !recipe) return;
+    const char* id=cstr(((uintptr_t(*)(uintptr_t))(*(void***)recipe)[0])(recipe));   // recipe vtbl[0] = id CryString
+    uintptr_t b=F<uintptr_t>(content,PC_ROWS), e=F<uintptr_t>(content,PC_ROWS+8);
+    int n=(b && e>b && (e-b)%ROW_SIZE==0)? (int)((e-b)/ROW_SIZE) : 0;
+    if(n<1 || n>12 || !kc::readable(b,e-b)){ logf("recipe page: %s has an unexpected material list (%d rows) - left as the game made it",id,n); return; }
+    if(strcmp(id,g_pageRecipe)){
+        strncpy_s(g_pageRecipe,id,_TRUNCATE);
+        g_pageQty=(g_batchLeft>0 && !strcmp(id,g_batchRecipe))? g_batchLeft : 1;
+    }
+    int cap=1<<30; char line[400]; size_t k=0; line[0]=0;
+    for(int i=0;i<n;i++){
+        uintptr_t r=b+i*ROW_SIZE; int have=F<int>(r,ROW_OWNED), need=F<int>(r,ROW_NEED);
+        if(k<sizeof line-80) k+=sprintf_s(line+k,sizeof line-k,"%s%s %d/%d",i?", ":"",cstr(r),have,need);
+        if(need<=0 || have<0 || need>100000){ cap=-1; break; }
+        cap=std::min(cap,have/need);
+    }
+    g_pageObj=obj; g_pageVt=obj? *(uintptr_t*)obj : 0; g_pageCap=cap;
+    int qty=(cap>=1)? std::clamp(g_pageQty,1,cap) : 1;
+    if(qty!=g_pageQty) logf("recipe page: %s x%d lowered to x%d (materials for %d)",id,g_pageQty,qty,cap);
+    g_pageQty=qty;
+    char sig[400]; sprintf_s(sig,"%s|%s|%d",id,line,qty);
+    if(strcmp(sig,g_pageLog)){ strcpy_s(g_pageLog,sig); logf("recipe page: %s \"%s\" owned/required: %s -> materials for %d, showing x%d",id,cstr(content+PC_NAME),line,cap,qty); }
+    if(qty<=1 || !page_open()) return;   // changes only ever happen on the forge's own recipe menu
+    for(int i=0;i<n;i++){ uintptr_t r=b+i*ROW_SIZE; F<int>(r,ROW_NEED)*=qty; }
+    char title[200]; sprintf_s(title,"%s x%d",cstr(content+PC_NAME),qty);
+    void* s=nullptr; pStrFromC(&s,title); pStrAssign((void*)(content+PC_NAME),&s); pStrFree(&s);
+}
+static void** MakeContentHook(void** out, uintptr_t recipe, uintptr_t soul){
+    void** r=pMakeContent(out,recipe,soul);
+    __try{ page_content(g_pageSlot? *g_pageSlot : 0,(uintptr_t)out[0],recipe); }
+    __except(EXCEPTION_EXECUTE_HANDLER){ logf("recipe page: fault while adjusting the page - left as the game made it"); }
+    return r;
+}
+// Asks the game to show the recipe page again (the same call the game makes when you pick the recipe in the list).
+static bool page_refresh(){
+    if(!page_open() || !g_pageObj || !g_pageRecipe[0] || !kc::readable(g_pageObj,8) || *(uintptr_t*)g_pageObj!=g_pageVt){
+        logf("recipe page: cannot redraw (page not open or changed) - pick the recipe in the list again"); return false;
+    }
+    void* s=nullptr; pStrFromC(&s,g_pageRecipe);
+    pShowPage(g_pageObj,&s,0);   // the game frees s
+    return true;
+}
+static void page_keys(int s){
+    bool plus=g_plus.pressed(), minus=g_minus.pressed();
+    plus=g_padPlus.pressed()||plus; minus=g_padMinus.pressed()||minus;
+    if(!(plus^minus) || s!=1 || F<uintptr_t>(g_m,M_WP) || !page_open() || !g_pageRecipe[0]) return;
+    int want=g_pageQty+(plus?1:-1);
+    if(want<1){ return; }
+    if(g_pageCap<1 || want>g_pageCap){ logf("recipe page: + ignored, materials for %d %s",g_pageCap<0?0:g_pageCap,g_pageRecipe); return; }
+    g_pageQty=want;
+    logf("recipe page: %c -> x%d %s",plus?'+':'-',want,g_pageRecipe);
+    page_refresh();
+}
+static void batch_cancel(const char* why){
+    if(g_batchLeft>0) logf("batch: cancelled (%s), %d of %d %s not made",why,g_batchLeft,g_batchTotal,g_batchRecipe);
+    g_batchLeft=0; g_batchTotal=0; g_batchRecipe[0]=0; g_batchAuto=false;
+}
+// The game left its recipe menu with a piece chosen (and paid for) through its own menu.
+static void batch_chosen(){
+    const char* id=recipeId(g_m);
+    int qty=(!strcmp(id,g_pageRecipe))? g_pageQty : 1;
+    if(g_batchLeft>0 && !strcmp(id,g_batchRecipe)){
+        if(qty<g_batchLeft){ logf("batch: lowered from %d left to %d on the recipe page",g_batchLeft,qty); g_batchLeft=qty; }
+        logf("batch: piece %d of %d %s chosen in the game's menu",g_batchTotal-g_batchLeft+1,g_batchTotal,id);
+        g_batchAuto=true; return;
+    }
+    if(g_batchLeft>0) batch_cancel("a different recipe was chosen");
+    if(qty<=1) return;
+    strncpy_s(g_batchRecipe,id,_TRUNCATE); g_batchTotal=g_batchLeft=qty; g_batchAuto=true;
+    logf("batch: x%d %s started (game showed materials for %d); piece 1 of %d",qty,id,g_pageCap,qty);
+}
+static void batch_quenched(){
+    if(g_batchLeft<=0 || strcmp(recipeId(g_m),g_batchRecipe)) return;
+    g_batchLeft--;
+    if(g_batchLeft>0) logf("batch: %d of %d %s done; %d left - pick the recipe in the game's menu and confirm it (the page shows x%d)",
+                           g_batchTotal-g_batchLeft,g_batchTotal,g_batchRecipe,g_batchLeft,g_batchLeft);
+    else { logf("batch: all %d %s done",g_batchTotal,g_batchRecipe); batch_cancel("finished"); }
+}
+static void batch_tick(int s){
+    if(s==1) g_menuSeen=g_clock();
+    if(g_lastSt==1 && s!=1){   // the recipe menu closed: with a piece chosen (2..20) or without (21 = leaving)
+        if(s>=2 && s<=20) batch_chosen();
+        g_pageObj=0; g_pageRecipe[0]=0; g_pageQty=1; g_pageLog[0]=0; g_menuSeen=0;
+    }
+    g_lastSt=s;
+    page_keys(s);
+}
+// Hook page for the one call this patches (0x119F030 -> 0x119F710): store r15 (the page), then jump to the hook.
+static uint8_t* alloc_near(uintptr_t target){
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    for(uintptr_t d=0x10000; d<0x70000000; d+=si.dwAllocationGranularity)
+        for(int sg=-1;sg<=1;sg+=2){
+            uintptr_t a=(target+sg*(intptr_t)d) & ~(uintptr_t)(si.dwAllocationGranularity-1);
+            if(void* p=VirtualAlloc((void*)a,0x1000,MEM_COMMIT|MEM_RESERVE,PAGE_EXECUTE_READWRITE)) return (uint8_t*)p;
+        }
+    return nullptr;
+}
+static bool hook_page(uintptr_t site, uintptr_t factory){
+    if(*(uint8_t*)site!=0xE8 || kc::rel32(site+1)!=factory){ logf("batch: recipe page call is not what this build expects - batches off"); return false; }
+    uint8_t* pg=alloc_near(site); if(!pg){ logf("batch: no memory for the recipe page hook - batches off"); return false; }
+    g_pageSlot=(volatile uintptr_t*)(pg+0x800);
+    uint8_t* p=pg;
+    p[0]=0x4C; p[1]=0x89; p[2]=0x3D; *(int32_t*)(p+3)=(int32_t)((uint8_t*)g_pageSlot-(p+7)); p+=7;   // mov [rip+slot], r15
+    p[0]=0xFF; p[1]=0x25; *(int32_t*)(p+2)=0; p+=6; *(uint64_t*)p=(uint64_t)&MakeContentHook;          // jmp [rip+0] -> hook
+    FlushInstructionCache(GetCurrentProcess(),pg,0x40);
+    pMakeContent=(MakeContent_t)factory;
+    DWORD old; VirtualProtect((void*)site,5,PAGE_EXECUTE_READWRITE,&old);
+    *(int32_t*)(site+1)=(int32_t)((uintptr_t)pg-(site+5));
+    VirtualProtect((void*)site,5,old,&old); FlushInstructionCache(GetCurrentProcess(),(void*)site,5);
+    return true;
+}
+struct QFound { uintptr_t page, make, ctor, rows, strFromC, strFree, strAssign; };
+static bool resolve_queue(kc::Resolver& R, QFound& q){
+    int before=R.fails;
+    q.page=R.find("recipe page",SIG_PAGE);
+    q.make=R.branch("recipe page data",q.page? q.page+PG_CALL : 0);
+    if(q.make) R.verify("recipe page data",q.make,SIG_PAGE_MAKE);
+    q.ctor=R.branch("recipe page data ctor",q.make? q.make+MK_CTOR : 0);
+    if(q.ctor) R.verify("recipe page data ctor",q.ctor,SIG_PAGE_CTOR);
+    q.rows=R.find("recipe page material rows",SIG_PAGE_ROWS);
+    q.strFromC=R.branch("string from text",q.page? q.page+PG_STR : 0);
+    q.strFree=R.branch("string free",q.page? q.page+PG_STRFREE : 0);
+    q.strAssign=R.branch("string assign",q.ctor? q.ctor+CT_ASSIGN : 0);
+    return R.fails==before;
 }
 
 static void UpdateHook(void* self,float dt){
@@ -470,7 +657,9 @@ static void UpdateHook(void* self,float dt){
     uintptr_t bs=(uintptr_t)self;
     __try{
         uintptr_t m=F<uintptr_t>(bs,BS_MODEL);
-        if(bs!=g_bs||m!=g_m){ if(g_ph!=Idle) logf("session changed -> idle"); g_ph=Idle; g_bs=bs; g_m=m; }
+        if(g_watch) watch(bs,m);
+        if(bs!=g_bs||m!=g_m){ if(g_ph!=Idle) logf("session changed -> idle"); g_ph=Idle; g_bs=bs; g_m=m; g_lastSt=-1; }
+        if(m && g_queue) batch_tick(F<uint8_t>(m,M_STATE));
         if(m) tick(dt);
     }__except(EXCEPTION_EXECUTE_HANDLER){ logf("exception in tick (phase %s)",PN[g_ph]); g_ph=Idle; }
 }
@@ -487,9 +676,10 @@ static bool resolve(kc::Resolver& R, Found& f){
 }
 #ifdef KC_DEVTOOLS
 extern "C" __declspec(dllexport) int KC_SelfTest(HMODULE game, uintptr_t* out){   // offline check (tools/selftest)
-    kc::Resolver R; R.im.load(game); Found f{}; bool ok=resolve(R,f);
-    uintptr_t* p=(uintptr_t*)&f; for(size_t i=0;i<sizeof f/8;i++) out[i]=p[i];
-    return ok? (int)(sizeof f/8) : -R.fails;
+    kc::Resolver R; R.im.load(game); Found f{}; QFound q{}; bool ok=resolve(R,f); ok=resolve_queue(R,q) && ok;
+    uintptr_t* p=(uintptr_t*)&f; size_t n=0; for(size_t i=0;i<sizeof f/8;i++) out[n++]=p[i];
+    p=(uintptr_t*)&q; for(size_t i=0;i<sizeof q/8;i++) out[n++]=p[i];
+    return ok? (int)n : -R.fails;
 }
 // Offline forge simulator hooks (tools/forgesim.cpp): a fake C_Blacksmithing/model/workpiece in plain memory.
 extern "C" __declspec(dllexport) void KC_SimInit(uintptr_t bs, void* workmap, uint64_t (*clock)(), int flipAt, const char* logPath){
@@ -505,12 +695,27 @@ static DWORD WINAPI Init(LPVOID){
     kc::init(g_self,"kcd2_autoforge");
     g_key.vk=kc::ini_key("Forge",VK_F9);
     g_flipAtPct=std::min(95,std::max(0,kc::ini_int("Options","FlipAt",50)));
+    g_watch=kc::ini_int("Options","WatchForge",0)!=0;
+    g_queue=kc::ini_int("Options","Queue",0)!=0;
+    g_plus.vk=kc::ini_key("IncreaseQueue",VK_OEM_PLUS); g_minus.vk=kc::ini_key("DecreaseQueue",VK_OEM_MINUS);
+    g_padPlus.vk=VK_ADD; g_padMinus.vk=VK_SUBTRACT;
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v1.1.2 (game ts 0x%08X) flip at %d%%",R.im.timestamp,g_flipAtPct);
+    logf("start v1.2.0-test (game ts 0x%08X) flip at %d%%%s%s",R.im.timestamp,g_flipAtPct,g_watch?", forge watch on (read-only)":"",g_queue?", batches on the recipe page":"");
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pWorkMap=f.workmap;
+    if(g_queue){   // optional: a failure here only turns batches off; forging works as before
+        QFound q{}; int fails=R.fails;
+        if(resolve_queue(R,q)){
+            pShowPage=(ShowPage_t)q.page; pStrFromC=(StrFromC_t)q.strFromC; pStrFree=(StrFree_t)q.strFree; pStrAssign=(StrAssign_t)q.strAssign;
+            g_queue=hook_page(q.page+PG_CALL,q.make);
+        } else g_queue=false;
+        R.fails=fails;
+        char kp[16],km[16];
+        logf(g_queue? "batch: ready (%s / %s on the forge's recipe page)" : "batch: off (this game version is not supported for batches)",
+             kc::key_name(g_plus.vk,kp,sizeof kp),kc::key_name(g_minus.vk,km,sizeof km));
+    }
     void** slot=&((void**)f.vt)[19];
     pOrigUpdate=(Update_t)f.update;
     kc::write_ptr(slot,(void*)&UpdateHook);
