@@ -104,12 +104,12 @@ static void t_model() {
     CHECK(f.user_plus("horseshoe", why) == -1, "horseshoe refused: metal 7/6 (%s)", why);
     CHECK(c.q.pieces() == 6, "6 pieces");
     char s[1600]; c.q.summary(s, sizeof s, 0);
-    CHECK(strstr(s, "Hunting Sword x2") && strstr(s, "Falchion x1") && strstr(s, "Basilard x3"), "summary lists items: %s", s);
-    CHECK(strstr(s, "Scrap Steel 10/11") != nullptr, "summary steel: %s", s);
+    CHECK(strstr(s, "x2 Hunting Sword") && strstr(s, "x1 Falchion") && strstr(s, "x3 Basilard"), "summary lists items: %s", s);
+    CHECK(strstr(s, "Scrap Steel: 10 / 11") != nullptr, "summary steel: %s", s);
     CHECK(strstr(s, "SHORT") == nullptr, "no shortage yet");
     f.inv["Fastening"] = 3; f.user_pick("falchion");   // a page shows fewer than queued: shortage shown
     c.q.summary(s, sizeof s, 0);
-    CHECK(strstr(s, "Fastening 4/3 SHORT 1") != nullptr, "shortage shown: %s", s);
+    CHECK(strstr(s, "Fastening: 4 / 3 (SHORT 1)") != nullptr, "shortage shown: %s", s);
     CHECK(c.q.remove_one("falchion") == 0 && c.q.find("falchion") < 0, "- removes");
     CHECK(c.q.pieces() == 5, "5 pieces");
 }

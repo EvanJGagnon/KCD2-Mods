@@ -90,10 +90,12 @@ struct Queue {
     // Text added to the game's recipe description while something is queued.
     void summary(char* out, size_t cap, int running) const {
         out[0] = 0;
-        if (running) cat(out, cap, "AutoForge queue: forging %d of %d\n", made + 1, made + pieces());
-        cat(out, cap, "Queue:");
-        for (int i = 0; i < n; i++) cat(out, cap, "%s %s x%d", i ? "," : "", it[i].title, it[i].qty);
-        cat(out, cap, " (%d item%s)\nWhole queue (need/have):", pieces(), pieces() == 1 ? "" : "s");
+        if (running) cat(out, cap, "Forging %d / %d\n", made + 1, made + pieces());
+        cat(out, cap, "CRAFT QUEUE (%d items)\n", pieces());
+        const int recipeLines = n < 6 ? n : 6;
+        for (int i = 0; i < recipeLines; i++) cat(out, cap, "  x%d %s\n", it[i].qty, it[i].title);
+        if (n > recipeLines) cat(out, cap, "  +%d more recipes\n", n - recipeLines);
+        cat(out, cap, "\nMATERIALS (need / have)\n");
         int shown = 0; char seen[MAXMAT][NAMELEN]; int ns = 0;
         for (int i = 0; i < n; i++) for (int k = 0; k < it[i].nrows; k++) {
             const char* m = it[i].rows[k].name; bool dup = false;
@@ -101,9 +103,12 @@ struct Queue {
             if (dup || ns >= MAXMAT) continue;
             copy(seen[ns++], NAMELEN, m);
             int need = total(m), h = have(m);
-            cat(out, cap, "%s %s %d/%d", shown++ ? "," : "", m, need, h < 0 ? 0 : h);
-            if (h >= 0 && need > h) cat(out, cap, " SHORT %d", need - h);
+            if (shown++ >= 8) continue; // keep the narrow book description readable
+            cat(out, cap, "  %s: %d / %d", m, need, h < 0 ? 0 : h);
+            if (h >= 0 && need > h) cat(out, cap, " (SHORT %d)", need - h);
+            cat(out, cap, "\n");
         }
+        if (shown > 8) cat(out, cap, "  +%d more materials\n", shown - 8);
     }
     // One line for the log / on-screen notice.
     void line(char* out, size_t cap) const {
