@@ -316,7 +316,7 @@ static const char* SIG_GETLOC_CALL = "48 8B 0D ?? ?? ?? ?? 48 8B 01 FF 90 68 05 
 static const char* SIG_SYS_GETLOC  = "48 8B 81 50 0D 00 00 C3";                                          // CSystem vtbl[173] 0x3D3300
 static const char* SIG_LOCALIZE    = "48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 55 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC 70 33 FF 45 8A E1 49 8B F0 4C 8B F2 4C 8B E9 48 39 79 18 0F 84 ?? ?? ?? ?? 48 85 D2 0F 84 ?? ?? ?? ?? 80 3A 40"; // CLocalizedStringsManager vtbl[23] 0x51D468 LocalizeLabel(label, CryString&, english)
 static const char* SIG_ITEMUINAME  = "E8 ?? ?? ?? ?? 0F 28 44 24 30 48 8D 54 24 20 48 8D 0D ?? ?? ?? ?? 66 0F 7F 44 24 20 E8 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B 10 48 8B C8 4C 8B 82 C8 00 00 00 33 D2 41 FF D0 48 8B CB 48 8B 90 A0 00 00 00"; // 0x2ABC37D ItemManager.GetItemUIName: class vtbl[25](0)+0xA0
-static const char* SIG_PRESENTER   = "48 83 EC 28 80 B9 A2 06 00 00 00 74 09 48 83 C1 68 E8 ?? ?? ?? ?? 48 83 C4 28 C3";  // 0x2E18ED0 "if (m_presentResult) emit brew result"
+static const char* SIG_PRESENTER_TAIL = "B9 A2 06 00 00 00 74 09 48 83 C1 68 E8 ?? ?? ?? ?? 48 83 C4 28 C3"; // stable body after the function first 5 bytes (the entry may have a JMP from another mod)  // 0x2E18ED0 "if (m_presentResult) emit brew result"
 static const char* SIG_SS_UPDATE   = "48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 30 48 8B 3D ?? ?? ?? ?? 48 8B F1 33 D2 0F 29 74 24 20";   // CScriptSystem vtbl[1] 0xA26B94
 static const char* SIG_SS_EXEC     = "48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 83 EC 50 48 8B F9 48 89 50 E8"; // CScriptSystem vtbl[6] ExecuteBuffer 0x4D4484
 static const uintptr_t O_PRESENT=0x6A2, O_SOUL=0x668, RDB_IFACE=0x78, RDB_ROWS=0x30, ROW_SIZE=0x80, ROW_ID=0x08, ROW_NAME=0x10, ICLS_UINAME=0xA0;
@@ -805,7 +805,29 @@ static bool resolve_queue(kc::Resolver& R, QFound& q, uintptr_t findclass){
     q.vtLoc=R.vtable("CLocalizedStringsManager",".?AVCLocalizedStringsManager@@",0); q.localize=R.slot("LocalizeLabel",q.vtLoc,23,SIG_LOCALIZE);
     q.uiName=R.find("GetItemUIName",SIG_ITEMUINAME);
     if(q.uiName && R.branch("GetItemUIName",q.uiName+0x1C)!=findclass) R.fail("GetItemUIName","does not look the class up with FindClassByGuid");
-    q.presenter=R.find("brew result presenter",SIG_PRESENTER);
+    // Other installed KCD2 mods may detour the first five bytes of the game's
+    // result presenter with E9 rel32. Our queue does not CALL this function or
+    // modify the detour: we only need proof that m_presentResult gates its popup.
+    // Resolve the unchanged tail and accept either exact original entry bytes
+    // or a readable JMP trampoline. Anything else disables only the 2.0 queue.
+    uintptr_t tail=R.find("brew result presenter (stable tail)",SIG_PRESENTER_TAIL);
+    if(tail){
+        const unsigned char* entry=(const unsigned char*)(tail-5);
+        const unsigned char original[5]={0x48,0x83,0xEC,0x28,0x80};
+        bool unhooked=memcmp(entry,original,5)==0;
+        uintptr_t jumpTo=0;
+        bool hooked=entry[0]==0xE9;
+        if(hooked){
+            int32_t displacement=0; memcpy(&displacement,entry+1,4);
+            jumpTo=(uintptr_t)(entry+5)+(intptr_t)displacement;
+            hooked=kc::readable(jumpTo,1);
+        }
+        if(!unhooked && !hooked) R.fail("brew result presenter","entry is neither original nor a readable jump");
+        else {
+            q.presenter=tail-5;
+            if(hooked) logf("queue: result presenter already detoured by another mod; verified unchanged body, leaving its hook untouched");
+        }
+    }
     q.vtSs=R.vtable("CScriptSystem",".?AVCScriptSystem@@",0);
     uintptr_t cur=q.vtSs? ((uintptr_t*)q.vtSs)[1] : 0;
     if(cur && !R.im.in_image(cur)){ if(R.find("CScriptSystem::Update",SIG_SS_UPDATE)) q.ssUpdate=cur; }   // another mod hooked it first: chain

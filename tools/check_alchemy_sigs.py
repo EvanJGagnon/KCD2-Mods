@@ -77,7 +77,7 @@ vsys = vtable('.?AVCSystem@@', 0); show('GetLocalizationManager', slot('GetLocal
 vloc = vtable('.?AVCLocalizedStringsManager@@', 0); show('LocalizeLabel', slot('LocalizeLabel', vloc, 23, 'SIG_LOCALIZE'))
 ui = find('SIG_ITEMUINAME'); show('GetItemUIName (class name key)', ui)
 if ui and branch(ui + 0x1C) != findclass: fails.append('GetItemUIName does not use FindClassByGuid')
-show('brew result presenter (+0x6A2)', find('SIG_PRESENTER'))
+show('brew result presenter (+0x6A2)', find('SIG_PRESENTER_TAIL') - 5)
 vss = vtable('.?AVCScriptSystem@@', 0)
 show('CScriptSystem::Update', slot('ScriptSystem Update', vss, 1, 'SIG_SS_UPDATE')); show('CScriptSystem::ExecuteBuffer', slot('ExecuteBuffer', vss, 6, 'SIG_SS_EXEC'))
 print('\n'.join(out))
