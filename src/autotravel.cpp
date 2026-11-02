@@ -143,6 +143,33 @@ static volatile uint64_t g_hookT=0;                                             
 static volatile bool g_arrived=false;
 
 using kc::logf;
+
+// ---------------- performance counters (DebugLog only; measure, change nothing) ----------------
+// Time the mod spends on the game thread: the road-choice hook (the mod's own work, without the game's
+// filter it calls), map marker refreshes and route redraws, and route plans.  With DebugLog=1 a "perf"
+// line sums each 10 s window that had any of it; "frames" counts the game's script-system updates in that
+// window, so calls per frame and milliseconds per frame can be read straight off it.
+static double g_qpcMs=0;
+static uint64_t kc_perf_now(){ LARGE_INTEGER t; QueryPerformanceCounter(&t); return (uint64_t)t.QuadPart; }
+static float kc_ticks_ms(uint64_t dt){
+    if(g_qpcMs==0){ LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpcMs=1000.0/(double)f.QuadPart; }
+    return (float)((double)dt*g_qpcMs);
+}
+static float kc_perf_ms(uint64_t t0){ return kc_ticks_ms(kc_perf_now()-t0); }
+static struct { uint64_t t0; uint32_t frames, fCalls, mCalls, hCalls, plans; double fMs, fGameMs, mMs, hMs, planMs; float fMax, mMax, planMax; } g_perf{};
+static void perf_plan(float ms){ g_perf.plans++; g_perf.planMs+=ms; if(ms>g_perf.planMax) g_perf.planMax=ms; }
+static void perf_flush(uint64_t now){             // game thread
+    if(!g_perf.t0){ g_perf.t0=now; return; }
+    if(now-g_perf.t0<10000) return;
+    if(kc::g_debug && (g_perf.fCalls || g_perf.mCalls || g_perf.hCalls || g_perf.plans)){
+        double fr=g_perf.frames? (double)g_perf.frames : 1.0;
+        logf("{\"ev\":\"perf\",\"s\":%.1f,\"frames\":%u,\"road_calls\":%u,\"road_calls_per_frame\":%.2f,\"road_ms\":%.3f,\"road_ms_per_frame\":%.4f,\"road_max_us\":%.0f,\"game_filter_ms\":%.3f,"
+             "\"map_calls\":%u,\"map_ms\":%.3f,\"map_max_ms\":%.3f,\"redraw_calls\":%u,\"redraw_ms\":%.3f,\"plans\":%u,\"plan_ms\":%.2f,\"plan_max_ms\":%.2f}",
+             (now-g_perf.t0)/1000.0,g_perf.frames,g_perf.fCalls,g_perf.fCalls/fr,g_perf.fMs,g_perf.fMs/fr,g_perf.fMax*1000.0,g_perf.fGameMs,
+             g_perf.mCalls,g_perf.mMs,g_perf.mMax,g_perf.hCalls,g_perf.hMs,g_perf.plans,g_perf.planMs,g_perf.planMax);
+    }
+    g_perf={}; g_perf.t0=now;
+}
 static bool rdn(uintptr_t a, void* out, size_t n){
     __try { memcpy(out,(const void*)a,n); return true; } __except(EXCEPTION_EXECUTE_HANDLER){ return false; }
 }
@@ -304,9 +331,21 @@ struct Graph {
     // the U-turn cost when it moves).  A sharp turn onto ANOTHER road at a junction is an ordinary turn
     // and costs nothing extra.  costOut: the route's total cost.
     bool route(int s,int t,std::vector<int>& path,float hx,float hy,float uturn,float first,float* costOut=nullptr) const {
-        path.clear();
-        if(costOut) *costOut=0;
-        if(s==t){ path.push_back(s); return true; }
+        bool ok=false; float c=0; route_n(s,&t,1,&path,&c,&ok,hx,hy,uturn,first);
+        if(costOut) *costOut=c;
+        return ok;
+    }
+    // The same search for up to two targets at once (plan_from needs both ends of the destination's
+    // segment).  It is the one-target search above, simply run on until every target is reached: the
+    // search state when a target is reached is exactly the state at which the one-target search for it
+    // stops, so each path and cost is identical to a separate route() call -- at the cost of one search.
+    void route_n(int s,const int* ts,int nt,std::vector<int>* paths,float* costs,bool* oks,float hx,float hy,float uturn,float first) const {
+        int64_t hit[2]={-1,-1}; int left=0;
+        for(int i=0;i<nt;i++){
+            paths[i].clear(); costs[i]=0; oks[i]=false;
+            if(s==ts[i]){ paths[i].push_back(s); oks[i]=true; } else left++;
+        }
+        if(!left) return;
         size_t E=to.size(); int back=behind_edge(s,hx,hy);
         std::vector<float> dist(E,1e30f); std::vector<int32_t> prev(E,-1), from(E,-1);
         typedef std::pair<float,uint32_t> P; std::priority_queue<P,std::vector<P>,std::greater<P>> q;
@@ -314,22 +353,25 @@ struct Graph {
             float d=cost[e]+extra[e]+((int)e==back?first:0.f);
             from[e]=s; if(d<dist[e]){ dist[e]=d; q.push({d,e}); }
         }
-        int64_t hit=-1;
-        while(!q.empty()){
+        while(!q.empty() && left){
             auto [d,e]=q.top(); q.pop();
             if(d>dist[e]) continue;
             int u=to[e];
-            if(u==t){ hit=e; break; }
+            bool stop=false;                           // the one-target search for this target stops here
+            for(int i=0;i<nt;i++) if(u==ts[i] && hit[i]<0 && !oks[i]){ hit[i]=e; left--; stop=true; }
+            if(stop && !left) break;                   // (a target reached first goes on being searched through, as the other target's search does)
             for(uint32_t f=off[u];f<off[u+1];f++){
                 float nd=d+cost[f]+extra[f]+((int32_t)to[f]==from[e]?uturn:0.f);      // straight back along the same segment
                 if(nd<dist[f]){ dist[f]=nd; prev[f]=(int32_t)e; from[f]=u; q.push({nd,f}); }
             }
         }
-        if(hit<0) return false;
-        if(costOut) *costOut=dist[hit];
-        for(int64_t e=hit;e>=0;e=prev[e]) path.push_back(to[e]);
-        path.push_back(s);
-        std::reverse(path.begin(),path.end()); return true;
+        for(int i=0;i<nt;i++){
+            if(hit[i]<0) continue;
+            costs[i]=dist[hit[i]];
+            for(int64_t e=hit[i];e>=0;e=prev[e]) paths[i].push_back(to[e]);
+            paths[i].push_back(s);
+            std::reverse(paths[i].begin(),paths[i].end()); oks[i]=true;
+        }
     }
 };
 static Graph g_graphs[3]; static int g_ng=0;
@@ -525,10 +567,13 @@ static bool g_viaA=false;                         // last plan arrived at the de
 // the horse carries on ahead unless turning round saves START_TURN_COST -- wherever the turn would be
 // (at once, or a few road points further on: both are the same turn-around for a moving horse).  A route
 // that turns round is never left to auto-follow: the rider is told (wrong-way notice) and the route waits.
-static bool route_to(int n0,int t,std::vector<int>& p,float* c){
-    if(g_planFree) return g_cur->route(n0,t,p,g_hx,g_hy,g_uturnCost,0.f,c);
+// Both ends of the destination's segment in one search (same routes as one search per end).
+static void route_to2(int n0,int ta,int tb,std::vector<int>& pa,std::vector<int>& pb,float& ca,float& cb,bool& oa,bool& ob){
+    int ts[2]={ta,tb}; std::vector<int> ps[2]; float cs[2]={0,0}; bool os[2]={false,false};
     float turn=std::max(g_uturnCost,START_TURN_COST);
-    return g_cur->route(n0,t,p,g_hx,g_hy,turn,turn,c);
+    if(g_planFree) g_cur->route_n(n0,ts,2,ps,cs,os,g_hx,g_hy,g_uturnCost,0.f);
+    else           g_cur->route_n(n0,ts,2,ps,cs,os,g_hx,g_hy,turn,turn);
+    pa.swap(ps[0]); pb.swap(ps[1]); ca=cs[0]; cb=cs[1]; oa=os[0]; ob=os[1];
 }
 
 // DebugLog only: what the planner was given and the road points it chose, for "the route is wrong" reports.
@@ -570,7 +615,8 @@ static void plan_from(int n0,bool free=false,const char* why=nullptr){
     if(!g_endOk) set_dest();
     if(!g_endOk){ logf("{\"ev\":\"plan_fail\",\"why\":\"no_destination\",\"mx\":%.1f,\"my\":%.1f}",g_mx,g_my); return; }
     // Route onto the destination's segment and across it, so the rider passes the exact closest point.
-    std::vector<int> pa,pb; float ca=0,cb=0; bool oa=route_to(n0,g_endA,pa,&ca), ob=route_to(n0,g_endB,pb,&cb);
+    std::vector<int> pa,pb; float ca=0,cb=0; bool oa=false,ob=false;
+    uint64_t pt0=kc_perf_now(); route_to2(n0,g_endA,g_endB,pa,pb,ca,cb,oa,ob); float planMs=kc_perf_ms(pt0);
     if(!oa && !ob){ logf("{\"ev\":\"plan_fail\",\"why\":\"no_route\"}"); return; }
     g_needWhy="unexpected";                           // a later plan with no reason set would show up as this in the log
     // Which end of the destination's segment to arrive from: the cheaper TOTAL (route cost to that end +
@@ -587,8 +633,9 @@ static void plan_from(int n0,bool free=false,const char* why=nullptr){
     g_cum.assign(n,0.f); g_rev.assign(n,0);
     for(size_t i=1;i<n;i++){ int a=g_route[i-1],b=g_route[i]; g_cum[i]=g_cum[i-1]+hypotf(g_cur->x[a]-g_cur->x[b],g_cur->y[a]-g_cur->y[b]); }
     for(size_t i=1;i+1<n;i++) g_rev[i]= g_route[i+1]==g_route[i-1];   // the route goes straight back here (a U-turn auto-follow cannot make)
-    logf("{\"ev\":\"plan\",\"why\":\"%s\",\"level\":\"%s\",\"from\":[%.1f,%.1f],\"to\":[%.1f,%.1f],\"len\":%.0f}",
-         reason,g_cur->name,g_cur->x[n0],g_cur->y[n0],g_mx,g_my,g_cum.back());
+    logf("{\"ev\":\"plan\",\"why\":\"%s\",\"level\":\"%s\",\"from\":[%.1f,%.1f],\"to\":[%.1f,%.1f],\"len\":%.0f,\"ms\":%.2f}",
+         reason,g_cur->name,g_cur->x[n0],g_cur->y[n0],g_mx,g_my,g_cum.back(),planMs);
+    perf_plan(planMs);
     if(!free && n>1){                                 // moving, and the route starts back the way the horse came
         int b=g_cur->behind_edge(n0,g_hx,g_hy);
         if(b>=0 && (int)g_cur->to[b]==g_route[1]){
@@ -816,8 +863,17 @@ static volatile uint64_t g_sayT=0;               // last time the wrong-way noti
 static void find_map();
 static void orient_step(uint64_t now);
 // Replacement for the angle filter at both chooser call sites (game thread).
+static bool FilterChoose(float* dir, float* cur, bool vanilla);
 static bool FilterHook(float* dir, float* cur){
+    uint64_t t0=kc_perf_now();
     bool vanilla=g_filter(dir,cur);
+    uint64_t t1=kc_perf_now();
+    bool r=FilterChoose(dir,cur,vanilla);
+    float game=kc_ticks_ms(t1-t0), all=kc_perf_ms(t0), own=all-game;
+    g_perf.fCalls++; g_perf.fMs+=own; g_perf.fGameMs+=game; if(own>g_perf.fMax) g_perf.fMax=own;
+    return r;
+}
+static bool FilterChoose(float* dir, float* cur, bool vanilla){
     uint64_t now=GetTickCount64(); g_hookT=now;
     if(kc::g_debug){                              // diagnostics: is the chooser asking while the horse starts off?
         static uint64_t dt=0;
@@ -1022,7 +1078,9 @@ static void* CpHook(void* self,void* out){
     void* r=g_cpget(self,out);
     __try {
         Mk s{0,0,0}; bool known=rd((uintptr_t)out,&s.rec) && (!s.rec || (rd(s.rec+0x50,&s.x) && rd(s.rec+0x54,&s.y) && sane(s.x,s.y)));
+        uint64_t t0=kc_perf_now();
         map_refresh(self,known? &s : nullptr,GetTickCount64());
+        float ms=kc_perf_ms(t0); g_perf.mCalls++; g_perf.mMs+=ms; if(ms>g_perf.mMax) g_perf.mMax=ms;
     } __except(EXCEPTION_EXECUTE_HANDLER){ logf("{\"ev\":\"map_line_error\",\"msg\":\"map line disabled for this session\"}"); g_showPath=nullptr; }
     return r;
 }
@@ -1032,9 +1090,10 @@ static void HideHook(void* elem,void* name,const bool* animate){
     g_sendEvent(elem,name,animate);
     static bool busy=false;                       // in case drawing the route ends up here itself
     if(busy || !g_mapLine || !route_shown()) return;   // nothing of ours to show: the game's hide stands
-    busy=true;
+    busy=true; uint64_t t0=kc_perf_now();
     __try { refresh_entity(true); float px=0,py=0; bool havePos=player_pos(px,py); draw_route((char*)elem-0x208,havePos,px,py); }
     __except(EXCEPTION_EXECUTE_HANDLER){ logf("{\"ev\":\"map_line_error\",\"msg\":\"map line disabled for this session\"}"); g_showPath=nullptr; }
+    g_perf.hCalls++; g_perf.hMs+=kc_perf_ms(t0);
     busy=false;
 }
 
@@ -1283,6 +1342,7 @@ static void* SsUpdateHook(void* self,void* a,void* b,void* c){
     // The wrong-way notice stays up (re-sent every 2.5 s) while the horse is actually riding the road
     // away from the route on auto-follow (see g_showWrong); never while standing or wandering about.
     uint64_t now=GetTickCount64();
+    g_perf.frames++; perf_flush(now);
     static uint64_t mt=0; if(now-mt>=50){ mt=now; sample_mount(); }
     static uint64_t ot=0;
     if(now-ot>=100){ ot=now; __try { marker_step(now); orient_step(now); } __except(EXCEPTION_EXECUTE_HANDLER){ g_wrongWay=g_showWrong=false; } }
