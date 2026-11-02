@@ -128,6 +128,8 @@ struct Game {
     virtual int can_craft(void* recipe) = 0;                // the game's craft check: 1 yes, 0 no, -1 unknown
     virtual bool craft() = 0;                               // the game's craft handler (what the craft key calls)
     virtual bool restart() = 0;                             // the game's forge start (what using the forge calls)
+    virtual bool result_open() = 0;                         // finished workpiece state, not an arbitrary menu
+    virtual bool dismiss_result() = 0;                     // request game's ItemSelection.Close UI action (NOT an Esc key)
     virtual void say(const char* line) = 0;                 // log + optional notice
     virtual ~Game() {}
 };
@@ -143,7 +145,9 @@ constexpr uint64_t MENU_SETTLE = 700, FOCUS_TIMEOUT = 3000, CONFIRM_TIMEOUT = 25
 
 struct Ctl {
     Queue q; Game* g = nullptr; Phase ph = Off; uint64_t t = 0; int cur = -1;
-    bool autoContinue = true; bool pieceAuto = false;  // pieceAuto: autoforge.cpp starts the forging autopilot
+    bool autoContinue = true; bool autoDismiss = false;
+    bool pieceAuto = false;  // pieceAuto: autoforge.cpp starts the forging autopilot
+    bool dismissTried = false;
     bool sawInactive = false; uint64_t inactiveT = 0;
     char lastPaused[160] = { 0 };
 
@@ -154,12 +158,12 @@ struct Ctl {
     void go(Phase p) { ph = p; t = g->now(); }
     void pause(const char* why) {
         if (ph == Off) return;
-        ph = Off; pieceAuto = false; copy(lastPaused, sizeof lastPaused, why);
+        ph = Off; pieceAuto = false; dismissTried = false; copy(lastPaused, sizeof lastPaused, why);
         say("AutoForge queue: paused - %s (%d left; F9 in the recipe menu resumes, Delete clears)", why, q.pieces());
     }
     void finish() {
         say("AutoForge queue: done, %d made", q.made);
-        q.clear(); ph = Off; pieceAuto = false;
+        q.clear(); ph = Off; pieceAuto = false; dismissTried = false;
     }
     // F9 in the recipe menu.
     bool start_in_menu() {
@@ -215,7 +219,25 @@ struct Ctl {
             return;
         case Forging: return;
         case WaitEnd:
-            if (active) { sawInactive = false; return; }
+            // The game opens its native ItemSelection result screen after quench.
+            // On this specific state only, ask that UI's Close() callback to fire.
+            // No synthetic Esc key: it can dismiss the wrong menu.
+            if (active) {
+                sawInactive = false;
+                if (autoContinue && autoDismiss && !dismissTried
+                    && now-t >= 3200 && g->result_open()) {
+                    dismissTried = true;
+                    if (!g->dismiss_result()) {
+                        pause("could not request the game's result close; dismiss manually with Esc");
+                        return;
+                    }
+                    say("AutoForge queue: requested native result-screen close");
+                }
+                if (now-t >= 16000) {
+                    pause("result screen did not close; press Esc once and restart queue from the recipe menu");
+                }
+                return;
+            }
             if (!sawInactive) { sawInactive = true; inactiveT = now; return; }
             if (now - inactiveT < END_DELAY) return;
             sawInactive = false;
@@ -251,7 +273,7 @@ struct Ctl {
         q.made++; if (--q.it[i].qty <= 0) q.erase(i);
         pieceAuto = false;
         if (q.pieces() <= 0) { finish(); return; }
-        sawInactive = false; go(WaitEnd);
+        sawInactive = false; dismissTried = false; go(WaitEnd);
     }
     // F9 during a piece.
     void stopped() { if (ph != Off) pause("stopped with the key"); }

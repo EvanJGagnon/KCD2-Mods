@@ -563,8 +563,14 @@ static const char* SIG_SS_UPDATE = "48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 30
 static const char* SIG_SS_EXEC   = "48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 83 EC 50 48 8B F9 48 89 50 E8"; // vtbl[6] ExecuteBuffer 0x4D4484
 static SsUpdate_t g_ssUpdate=nullptr; static SsExec_t g_ssExec=nullptr;
 static char g_noticeBuf[2][260]; static volatile LONG g_noticeSeq=0, g_noticeDone=0;
+static volatile LONG g_resultCloseQueued=0;
+static bool g_noticesEnabled=true;
+// This is the actual game UI element, from IPL_GameData.pak / Libs/UI/UIElements/ItemSelection.xml.
+// It exposes Close(Force: bool) and fires OnClosed to the game. This is deliberately
+// not an input event / Esc key; it runs only after queued quench completion.
+static const char* NATIVE_RESULT_CLOSE = "UIAction.CallFunction('ItemSelection', -1, 'Close', false)";
 static void notice(const char* text){
-    if(!g_ssExec) return;
+    if(!g_ssExec || !g_noticesEnabled) return;
     LONG n=g_noticeSeq+1; char* b=g_noticeBuf[n&1]; size_t k=0;
     k+=sprintf_s(b,sizeof g_noticeBuf[0],"Game.SendInfoText(\"");
     for(const char* c=text; *c && k<sizeof g_noticeBuf[0]-24; c++) b[k++]= (*c=='"'||*c=='\\'||*c=='\n'||*c=='\r')? '\'' : *c;
@@ -578,6 +584,15 @@ static void* SsUpdateHook(void* self,void* a,void* b,void* c){
         g_noticeDone=n; const char* line=g_noticeBuf[n&1];
         __try { g_ssExec(self,line,strlen(line),"TheatricalAutoForge",nullptr); }
         __except(EXCEPTION_EXECUTE_HANDLER){ g_ssExec=nullptr; logf("queue notices: script error - notices off"); }
+    }
+    if(InterlockedExchange(&g_resultCloseQueued,0)!=0 && g_ssExec){
+        __try {
+            bool accepted=g_ssExec(self,NATIVE_RESULT_CLOSE,strlen(NATIVE_RESULT_CLOSE),
+                "TheatricalAutoForgeResultClose",nullptr);
+            logf("queue: native ItemSelection.Close requested through game's UIAction; script accepted=%d",(int)accepted);
+        } __except(EXCEPTION_EXECUTE_HANDLER) {
+            logf("queue: native result close call failed; queue will require manual Esc");
+        }
     }
     return r;
 }
@@ -646,6 +661,18 @@ struct ForgeGame : fq::Game {
         bool ok=pStartForge(g_bs,g_forgeId);
         logf("queue: game forge start (entity %u) -> %s",g_forgeId,ok?"started":"refused (too far / busy)");
         return ok;
+    }
+    bool result_open() override {
+        // Both fields were observed live at the post-quench selection screen:
+        // state 7 (hardening), m_hard 2 (quenched). Never close any UI otherwise.
+        return g_m && g_bs && F<uint8_t>(g_bs,BS_ACTIVE)!=0 &&
+               F<uint8_t>(g_m,M_STATE)==ST_HARDEN &&
+               F<uint8_t>(g_m,M_HARD)==2;
+    }
+    bool dismiss_result() override {
+        if(!result_open() || !g_ssExec) return false;
+        InterlockedExchange(&g_resultCloseQueued,1);
+        return true;
     }
     void say(const char* line) override { logf("%s",line); notice(line); }
 };
@@ -847,7 +874,8 @@ static DWORD WINAPI Init(LPVOID){
     g_plus.vk=kc::ini_key("IncreaseQueue",VK_OEM_PLUS); g_minus.vk=kc::ini_key("DecreaseQueue",VK_OEM_MINUS);
     g_padPlus.vk=VK_ADD; g_padMinus.vk=VK_SUBTRACT; g_clear.vk=kc::ini_key("ClearQueue",VK_DELETE);
     g_autoContinue=kc::ini_int("Options","AutoContinue",1)!=0;
-    bool notices=kc::ini_int("Options","QueueNotices",1)!=0;
+    g_noticesEnabled=kc::ini_int("Options","QueueNotices",1)!=0;
+    const bool autoDismiss=kc::ini_int("Options","QueueAutoDismissResult",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
     logf("start v2.0.0-test (game ts 0x%08X) flip at %d%%%s%s",R.im.timestamp,g_flipAtPct,g_watch?", forge watch on (read-only)":"",g_queue?", recipe queue on":"");
@@ -867,7 +895,10 @@ static DWORD WINAPI Init(LPVOID){
         if(g_canSwitch && resolve_restart(R,q)){ pStartForge=(StartForge_t)q.start; g_canRestart=true; }
         R.fails=fails;
         g_ctl.g=&g_game; g_ctl.autoContinue=g_autoContinue && g_canRestart;
-        if(g_queue && notices) install_notices(R.im);
+        if(g_queue) install_notices(R.im); // required for result UI close even if notices are hidden
+        g_ctl.autoDismiss=autoDismiss && g_ssExec!=nullptr;
+        logf("queue: result screen auto-close %s (ItemSelection.Close; never sends Esc)",
+             g_ctl.autoDismiss?"enabled":"off (manual Esc still available)");
         char kp[16],km[16],kc2[16];
         if(!g_queue) logf("queue: off (this game version is not supported for the queue)");
         else logf("queue: ready (%s / %s on the forge's recipe page, %s clears; switching recipes %s, reopening the forge %s)",

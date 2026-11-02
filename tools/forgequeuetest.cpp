@@ -28,6 +28,8 @@ static const Recipe* rec(const std::string& id) { for (auto& r : R) if (r.id == 
 struct Fake : fq::Game {
     uint64_t t = 1000; std::map<std::string, int> inv;
     int state = 0; bool active = false; std::string focusedId = "horseshoe", pageId; uint64_t pageT = 0;
+    bool simulateResultScreen = false, resultWaiting = false, closeWorks = true;
+    int closeRequests = 0;
     std::string pendingFocus; int focusDelay = 0; bool flashWorks = true, restartWorks = true;
     std::string chosen; int pieceTicks = 0; int crafts = 0, wrongCrafts = 0; std::string wantAtCraft;
     std::vector<std::string> made, lines; fq::Ctl* ctl = nullptr; std::string lastQueuedWanted;
@@ -47,6 +49,11 @@ struct Fake : fq::Game {
         chosen = focusedId; state = 2; pieceTicks = 0; return true;
     }
     bool restart() override { if (!restartWorks || active) return false; open_menu(); return true; }
+    bool result_open() override { return simulateResultScreen && resultWaiting && active && state==18; }
+    bool dismiss_result() override {
+        if (!result_open() || !closeWorks) return false;
+        closeRequests++; resultWaiting=false; active=false; state=22; return true;
+    }
     void say(const char* line) override { lines.push_back(line); if (getenv("FQ_VERBOSE")) printf("    | %s\n", line); }
     // ---- the fake game ----
     void draw_page() {
@@ -56,7 +63,7 @@ struct Fake : fq::Game {
         for (auto& m : r->mats) { fq::Row x{}; fq::copy(x.name, fq::NAMELEN, m.first.c_str()); x.need = m.second; rows.push_back(x); have.push_back(inv[m.first]); }
         ctl->q.page(r->id.c_str(), r->title.c_str(), rows.data(), (int)rows.size(), have.data(), (void*)r);
     }
-    void open_menu() { active = true; state = 1; pageT = 0; draw_page(); }
+    void open_menu() { active = true; state = 1; resultWaiting = false; pageT = 0; draw_page(); }
     void close_menu() { state = 3; active = false; pageT = 0; ctl->menu_closed(); }
     void user_pick(const std::string& id) { focusedId = id; draw_page(); }
     // + on the page for the recipe the user looks at
@@ -74,9 +81,15 @@ struct Fake : fq::Game {
         if (seen == 1 && state != 1 && state >= 2 && state <= 20) ctl->chosen(chosen.c_str());
         seen = state;
         if (state == 2) { state = 5; }
-        else if (state == 18) { if (++pieceTicks > 60) { state = 22; active = false; } }   // the game ends the session
+        else if (state == 18) {
+            if (simulateResultScreen && resultWaiting) { /* result UI waits for the Close event */ }
+            else if (++pieceTicks > 60) { state = 22; active = false; }
+        }
         else if (state >= 4 && state <= 20) {
-            if (++pieceTicks == 40) { made.push_back(chosen); ctl->quenched(chosen.c_str()); state = 18; }
+            if (++pieceTicks == 40) {
+                made.push_back(chosen); ctl->quenched(chosen.c_str());
+                state = 18; resultWaiting = simulateResultScreen;
+            }
         }
         ctl->tick(state, active);
     }
@@ -214,7 +227,28 @@ static void t_other_recipe() {
     CHECK(!c.running() && c.q.pieces() == 1, "queue untouched by a normal piece");
 }
 
+static void t_native_result_close() {
+    printf("native ItemSelection close: one request only after queued quench; otherwise manual Esc fallback\n");
+    Fake f; fq::Ctl c; setup(f, c);
+    f.simulateResultScreen = true; c.autoDismiss = true;
+    f.inv = { { "Scrap Steel", 8 }, { "Fastening", 5 }, { "Scrap Metal", 6 } };
+    f.open_menu(); f.user_plus("hunting_sword"); f.user_plus("hunting_sword");
+    c.start_in_menu(); f.run(1000);
+    CHECK(f.made.size() == 2 && c.q.pieces() == 0, "queued 2 complete with result screen (%zu)", f.made.size());
+    CHECK(f.closeRequests == 1, "only the FIRST result auto-dismissed (%d requests)", f.closeRequests);
+    CHECK(said(f, "requested native result-screen close"), "native close request logged");
+
+    Fake fail; fq::Ctl pause; setup(fail,pause);
+    fail.simulateResultScreen=true; fail.closeWorks=false; pause.autoDismiss=true;
+    fail.inv={ { "Scrap Steel", 8 }, { "Fastening", 5 }, { "Scrap Metal", 6 } };
+    fail.open_menu(); fail.user_plus("hunting_sword");fail.user_plus("hunting_sword");
+    pause.start_in_menu(); fail.run(300);
+    CHECK(!pause.running() && pause.q.pieces()==1,
+          "failed native close pauses with 1 left, leaving player in charge");
+    CHECK(said(fail,"dismiss manually with Esc"),"explicit manual Esc fallback logged");
+}
 int main() {
+    t_native_result_close();
     t_model(); t_full_run(); t_run_out(); t_focus_fails(); t_restart_refused(); t_cancel(); t_no_autocontinue(); t_other_recipe();
     printf(g_fail ? "%d FAILED\n" : "ALL PASSED\n", g_fail);
     return g_fail ? 1 : 0;
