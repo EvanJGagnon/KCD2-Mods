@@ -5,12 +5,15 @@
 # The audit fails the run (exit code 1) on a missing file, a version mismatch, a hotkey used twice, or anything
 # that looks like a game asset or a build leftover (.pdb, .exe, .adb, .gfx, game tables, ...).
 import os, re, sys, shutil, zipfile, datetime, hashlib
+from forge_loc import rows as forge_text
 
 R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 AUTHOR = 'Flubbermunchkin'
 DATA = os.path.join(R, 'data')
 KEYHELP = '; key: F1-F12, a letter or digit, or a symbol key such as ]\n'
 DEBUG = '; 1 = write a detailed log (for bug reports)\nDebugLog=0\n'
+FORGE_QUEUE = ('; opt in to the multi-recipe queue on the game recipe page\nQueue=1\n'
+               'AutoContinue=1\nQueueAutoDismissResult=1\nQueueNotices=1\n')
 TH = os.path.join(R, 'theatrical')
 LANGS = ['Chineses', 'Chineset', 'Czech', 'English', 'French', 'German', 'Italian', 'Japanese', 'Korean',
          'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish', 'Ukrainian', 'Vietnamese']
@@ -35,15 +38,15 @@ AM_DESC = ("Experimental aim assist: while a bow, crossbow or hand cannon is aim
 MODS = [
     # ---- published on Nexus (src\) ----
     dict(folder='theatrical_autoforge', title='Theatrical AutoForge', zip='TheatricalAutoForge', dll='kcd2_autoforge.dll', data=[],
-         desc='Henry forges the chosen piece himself, stroke by stroke, through the game\'s own forge actions (F9).', ver='1.1.2', key='Forge',
+         desc='Henry forges the chosen piece himself, stroke by stroke, through the game\'s own forge actions (F9).', ver='2.0.1-test', key='Forge', text=forge_text(),
          ini='[Keys]\n' + KEYHELP + 'Forge=F9\n\n[Options]\n'
-             '; turn the piece over once at this % completion, like a smith would (0 = only when a side is worked out)\nFlipAt=50\n' + DEBUG),
+             '; turn the piece over once at this % completion, like a smith would (0 = only when a side is worked out)\nFlipAt=50\n' + FORGE_QUEUE + DEBUG),
     # the same mod with the planned flip off (FlipAt=0), forging as 1.0.0 did; same folder, so it replaces the other
     dict(folder='theatrical_autoforge', title='Theatrical AutoForge', zip='TheatricalAutoForge-NoFlip', dll='kcd2_autoforge.dll', data=[],
-         desc='Henry forges the chosen piece himself, stroke by stroke, through the game\'s own forge actions (F9).', ver='1.1.2', key='Forge',
+         desc='Henry forges the chosen piece himself, stroke by stroke, through the game\'s own forge actions (F9).', ver='2.0.1-test', key='Forge', text=forge_text(),
          variant_of='TheatricalAutoForge',
          ini='[Keys]\n' + KEYHELP + 'Forge=F9\n\n[Options]\n'
-             '; turn the piece over once at this % completion, like a smith would (0 = only when a side is worked out)\nFlipAt=0\n' + DEBUG),
+             '; turn the piece over once at this % completion, like a smith would (0 = only when a side is worked out)\nFlipAt=0\n' + FORGE_QUEUE + DEBUG),
     dict(folder='theatrical_autobrew', title='Theatrical Autobrew', zip='TheatricalAutobrew', dll='kcd2_alchemy.dll', data=['alch_recipes.txt'],
          desc='Henry brews the open recipe step by step, in real time (F8). An adaptation of Autobrew by JerryYOJ.', ver='1.0.2', key='Brew',
          ini='[Keys]\n' + KEYHELP + 'Brew=F8\n\n[Options]\n' + DEBUG),

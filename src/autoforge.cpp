@@ -10,6 +10,7 @@
 // Log: kcd2_autoforge.log next to the DLL.
 #include "kcd2_common.h"
 #include "forge_queue2.h"
+#include "msgpump.h"
 #include <cmath>
 #include <algorithm>
 
@@ -540,6 +541,13 @@ static MakeContent_t pMakeContent=nullptr; static ShowPage_t pShowPage=nullptr;
 static StrFromC_t pStrFromC=nullptr; static StrFree_t pStrFree=nullptr; static StrAssign_t pStrAssign=nullptr;
 static CanCraft_t pCanCraft=nullptr; static Craft_t pCraft=nullptr; static StartForge_t pStartForge=nullptr;
 static UiMgr_t pUiMgr=nullptr; static FlashCall_t pFlashCall=nullptr; static uintptr_t g_apseVt=0;
+// Vanilla interaction 0x86BFC8 and script StartMinigame 0x2ED032C both use
+// manager.GetComponent(playerEntity, 0x0C, create=true, finalFlag=false).
+// The lookup owns construction/registration; never construct or scan the heap ourselves.
+using ComponentLookup_t = uintptr_t (*)(uintptr_t,uint32_t,uint8_t,bool,bool);
+static ComponentLookup_t pComponentLookup=nullptr;
+static UiMgr_t pForgeManager=nullptr, pGameContext=nullptr;
+static uint32_t g_queueActorId=0;
 static volatile uintptr_t* g_pageSlot=nullptr;    // the hook stub stores the page object (r15 in 0x119F030) here
 static bool g_queue=false, g_canSwitch=false, g_canRestart=false, g_autoContinue=true;
 static uint64_t g_menuSeen=0;                     // last tick the forge showed its recipe menu (state 1)
@@ -562,7 +570,8 @@ typedef bool  (*SsExec_t)(void*,const char*,size_t,const char*,void*);
 static const char* SIG_SS_UPDATE = "48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 30 48 8B 3D ?? ?? ?? ?? 48 8B F1 33 D2 0F 29 74 24 20";   // vtbl[1] 0xA26B94
 static const char* SIG_SS_EXEC   = "48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 83 EC 50 48 8B F9 48 89 50 E8"; // vtbl[6] ExecuteBuffer 0x4D4484
 static SsUpdate_t g_ssUpdate=nullptr; static SsExec_t g_ssExec=nullptr;
-static char g_noticeBuf[2][260]; static volatile LONG g_noticeSeq=0, g_noticeDone=0;
+static const int NOTICE_RING=6;
+static char g_noticeBuf[NOTICE_RING][96]; static volatile LONG g_noticeSeq=0, g_noticeDone=0;
 static bool g_noticesEnabled=true;
 // Genuine "close" input handler registered by C_UIModalDialogItem::Open:
 // at game RVA 0x2B14E80 it registers an action named "close", whose
@@ -578,19 +587,22 @@ static volatile uintptr_t* g_modalSlotB=nullptr;
 static bool g_nativeModalReady=false;
 static bool g_nativeModalClosedThisTick=false;
 static volatile LONG g_nativeCloseGuard=0;
-static void notice(const char* text){
-    if(!g_ssExec || !g_noticesEnabled) return;
-    LONG n=g_noticeSeq+1; char* b=g_noticeBuf[n&1]; size_t k=0;
-    k+=sprintf_s(b,sizeof g_noticeBuf[0],"Game.SendInfoText(\"");
-    for(const char* c=text; *c && k<sizeof g_noticeBuf[0]-24; c++) b[k++]= (*c=='"'||*c=='\\'||*c=='\n'||*c=='\r')? '\'' : *c;
-    sprintf_s(b+k,sizeof g_noticeBuf[0]-k,"\", false)");
+// HUD text: the game resolves every SendInfoText string as a localization key, exactly as its own scripts use it
+// (Game.SendInfoText('@reputation_penance_paid', false)); free text comes out as "@word @word".  So only "@taf_*" keys
+// are sent, and their English text ships in Localization/<Language>_xml.pak (fq::FQ_NOTE_LIST in forge_queue2.h).
+// A short ring keeps notices that are raised between two script updates (the script system is idle while the game
+// is paused, e.g. behind the result dialog); the oldest is dropped only if it fills up.
+static void notice_key(const char* key){
+    if(!g_ssExec || !g_noticesEnabled || !key || !*key) return;
+    LONG n=g_noticeSeq+1; if(n-g_noticeDone>=NOTICE_RING) g_noticeDone=n-NOTICE_RING+1;   // full: drop the oldest
+    char* b=g_noticeBuf[n%NOTICE_RING];
+    sprintf_s(b,sizeof g_noticeBuf[0],"Game.SendInfoText(\"@%s\", false)",key);
     InterlockedExchange(&g_noticeSeq,n);
 }
 static void* SsUpdateHook(void* self,void* a,void* b,void* c){
     void* r=g_ssUpdate(self,a,b,c);
-    LONG n=g_noticeSeq;
-    if(n!=g_noticeDone && g_ssExec){
-        g_noticeDone=n; const char* line=g_noticeBuf[n&1];
+    if(g_noticeDone!=g_noticeSeq && g_ssExec){          // one line per script update
+        LONG n=++g_noticeDone; const char* line=g_noticeBuf[n%NOTICE_RING];
         __try { g_ssExec(self,line,strlen(line),"TheatricalAutoForge",nullptr); }
         __except(EXCEPTION_EXECUTE_HANDLER){ g_ssExec=nullptr; logf("queue notices: script error - notices off"); }
     }
@@ -635,6 +647,8 @@ static void clear_result_modal_capture(){
 static bool native_modal_live(uintptr_t ptr){
     return ptr && kc::readable(ptr,0xA9) && F<uint8_t>(ptr,0xA8)==1;
 }
+static uintptr_t g_bsVt=0;             // C_Blacksmithing vtable: proves g_bs still is that object when used outside its update
+static bool bs_valid(){ return g_bs && g_bsVt && kc::readable(g_bs,0xC0) && *(uintptr_t*)g_bs==g_bsVt; }
 static uintptr_t active_result_modal(){
     const uintptr_t a=g_modalSlotA?*g_modalSlotA:0, b=g_modalSlotB?*g_modalSlotB:0;
     const bool aa=native_modal_live(a), bb=native_modal_live(b);
@@ -671,44 +685,76 @@ struct ForgeGame : fq::Game {
         pCraft(g_bs); return true;
     }
     bool restart() override {
-        if(!g_canRestart || !g_bs || !g_forgeId || F<uint8_t>(g_bs,BS_ACTIVE)) return false;
-        bool ok=pStartForge(g_bs,g_forgeId);
-        logf("queue: game forge start (entity %u) -> %s",g_forgeId,ok?"started":"refused (too far / busy)");
-        return ok;
+        if(!g_canRestart || !pStartForge || !pComponentLookup || !pForgeManager || !pGameContext ||
+           !g_forgeId || !g_queueActorId || active_result_modal()) return false;
+        // Resolve the CURRENT player just as vanilla's script interaction does (0x2ED02C0).
+        // Do not read BS_ACTOR from g_bs: that entire allocation may already be retired.
+        uintptr_t ctx=pGameContext();
+        if(!ctx || !kc::readable(ctx+8,8)) return false;
+        uintptr_t playerSystem=F<uintptr_t>(ctx,8);
+        if(!playerSystem || !kc::readable(playerSystem,8)) return false;
+        uintptr_t vt=F<uintptr_t>(playerSystem,0);
+        if(!vt || !kc::readable(vt+0x200,8) || !F<uintptr_t>(vt,0x200)) return false;
+        uintptr_t actor=((uintptr_t(*)(uintptr_t))F<uintptr_t>(vt,0x200))(playerSystem);
+        if(!actor || !kc::readable(actor+0x30,4) || F<uint32_t>(actor,0x30)!=g_queueActorId){
+            logf("queue: current player changed/unavailable - refuse forge reacquisition"); return false;
+        }
+        uintptr_t manager=pForgeManager();
+        if(!manager) return false;
+        uintptr_t fresh=pComponentLookup(manager,g_queueActorId,0x0C,true,false);
+        if(!fresh || !g_bsVt || !kc::readable(fresh,0xF0) || F<uintptr_t>(fresh,0)!=g_bsVt ||
+           F<uintptr_t>(fresh,BS_ACTOR)!=actor){
+            logf("queue: native forge component lookup returned no valid player component"); return false;
+        }
+        // Never restart a live session, including one the player opened manually.
+        if(F<uint8_t>(fresh,BS_ACTIVE)){
+            logf("queue: reacquired forge component already active - refuse duplicate start"); return false;
+        }
+        const uintptr_t old=g_bs;
+        bool ok=pStartForge(fresh,g_forgeId);
+        // Start can call into the game and change lifetime. Only publish a still-valid
+        // component after success. UpdateHook will adopt its model on the next update.
+        if(ok && kc::readable(fresh,0xF0) && F<uintptr_t>(fresh,0)==g_bsVt &&
+           F<uint8_t>(fresh,BS_ACTIVE) && F<uint32_t>(fresh,BS_ENTITY)==g_forgeId){
+            g_bs=fresh; g_m=0; g_lastSt=-1;
+            logf("queue: native reacquisition old=%p fresh=%p player=%u; forge %u started (thread %lu)",
+                 (void*)old,(void*)fresh,g_queueActorId,g_forgeId,GetCurrentThreadId());
+            return true;
+        }
+        logf("queue: reacquired forge %p start refused/not active (entity %u)",(void*)fresh,g_forgeId);
+        return false;
     }
+    // The result dialog is the game's item dialog (C_UIModalDialogItem) that one of the two original Open call sites
+    // just opened (captured owner, active flag +0xA8 == 1).  The controller only asks this in the phase right after
+    // our own piece was quenched, so that is the dialog it means.
     bool result_open() override {
-        // Both fields were observed live at the post-quench selection screen:
-        // state 7 (hardening), m_hard 2 (quenched). Never close any UI otherwise.
-        return g_nativeModalReady && g_m && g_bs &&
-               F<uint8_t>(g_bs,BS_ACTIVE)!=0 &&
-               F<uint8_t>(g_m,M_STATE)==ST_HARDEN &&
-               F<uint8_t>(g_m,M_HARD)==2 && active_result_modal()!=0;
+        return g_nativeModalReady && active_result_modal()!=0;
     }
     bool dismiss_result() override {
-        if(!pNativeItemClose || !result_open()) {
-            logf("queue: native result owner not ready or not visible - manual Esc needed");
-            return false;
-        }
-        if(InterlockedCompareExchange(&g_nativeCloseGuard,1,0)!=0) return false;
-        uintptr_t modal=active_result_modal();
-        if(!modal) return false;
-        // The input system's genuine "close" callback only accesses
-        // [context+8] (verified in game's 0x1F53E90 disassembly).
-        // It closes the modal, unregisters its input, and invokes the native
-        // completion delegate, not just the visible Flash animation.
+        uintptr_t modal=pNativeItemClose? active_result_modal() : 0;
+        if(!modal){ logf("queue: native result owner not ready or not visible - manual Esc needed"); return false; }
+        if(InterlockedCompareExchange(&g_nativeCloseGuard,1,0)!=0){ logf("queue: native result close already requested"); return false; }
+        // The input system's own "close" callback only reads [context+8] (the dialog) - verified in the game's 0x1F53E90.
+        // It runs C_UIModalDialogItem::Close and then the dialog's completion delegate, i.e. what Esc does; this call
+        // happens on the game's window thread (see msgpump.h), where its input handlers normally run.
         void* context[2]={nullptr,(void*)modal};
-        g_nativeModalClosedThisTick=true; // avoid touching forge pointers after callback
+        g_nativeModalClosedThisTick=true;      // the completion may release the forge model: no autopilot tick after it
         __try {
-            logf("queue: executing game's native result dialog close input handler");
+            logf("queue: executing the game's native result close (dialog %p, thread %lu)",(void*)modal,GetCurrentThreadId());
             pNativeItemClose(context);
-            logf("queue: native result close handler returned; waiting for inactive forge session");
+            logf("queue: native result close returned; dialog active flag now %d",native_modal_live(modal)?1:0);
         } __except(EXCEPTION_EXECUTE_HANDLER) {
-            logf("queue: native result close threw; no retries, manual Esc required");
+            logf("queue: native result close faulted (0x%08lX); no retry - close it with Esc",GetExceptionCode());
             return false;
         }
         return true;
     }
-    void say(const char* line) override { logf("%s",line); notice(line); }
+    void say(const char* line) override { logf("%s",line); }
+    void note(fq::Note n) override { notice_key(fq::note_key(n)); }
+    void piece_note(int n,int of) override {
+        char key[40]; if(n>=1 && n<=of && of<=FQ_PIECE_MAX) sprintf_s(key,"taf_item_%d_%d",n,of); else strcpy_s(key,"taf_item_next");
+        notice_key(key);
+    }
 };
 static ForgeGame g_game;
 
@@ -762,12 +808,12 @@ static void page_keys(int s){
     plus=g_padPlus.pressed()||plus; minus=g_padMinus.pressed()||minus;
     if(s!=1 || F<uintptr_t>(g_m,M_WP) || !page_open() || !g_pageRecipe[0]) return;
     if(g_ctl.ph==fq::WaitMenu||g_ctl.ph==fq::Focusing||g_ctl.ph==fq::Confirmed) return;   // the queue is choosing right now
-    if(clr){ if(g_ctl.q.pieces()>0){ g_ctl.q.clear(); g_ctl.ph=fq::Off; g_game.say("AutoForge queue: cleared"); page_refresh(); } return; }
+    if(clr){ if(g_ctl.q.pieces()>0){ g_ctl.q.clear(); g_ctl.ph=fq::Off; g_game.say("AutoForge queue: cleared"); g_game.note(fq::N_CLEARED); page_refresh(); } return; }
     if(!(plus^minus)) return;
     char why[200]={0}, ql[300];
     if(plus){
         int q=g_ctl.q.add(g_pageRecipe,g_pageTitle,g_pageRows,g_pageN,(void*)g_pageRecipeObj,why,sizeof why);
-        if(q<0){ char m[300]; sprintf_s(m,"AutoForge queue: no more %s - %s",fqlabel::display(g_pageTitle),why); g_game.say(m); return; }
+        if(q<0){ char m[300]; sprintf_s(m,"AutoForge queue: no more %s - %s",fqlabel::display(g_pageTitle),why); g_game.say(m); g_game.note(strstr(why,"holds")? fq::N_QUEUE_FULL : fq::N_NO_MORE); return; }
     } else { if(g_ctl.q.qty(g_pageRecipe)<=0) return; g_ctl.q.remove_one(g_pageRecipe); }
     g_ctl.q.line(ql,sizeof ql);
     logf("recipe page: %c %s -> x%d; queue: %s",plus?'+':'-',g_pageRecipe,g_ctl.q.qty(g_pageRecipe),ql);
@@ -778,7 +824,11 @@ static void batch_cancel(const char* why){ (void)why; if(g_queue) g_ctl.stopped(
 static void queue_tick(int s){
     uint64_t now=g_clock();
     bool active=g_bs && F<uint8_t>(g_bs,BS_ACTIVE)!=0;
-    if(active){ uint32_t id=F<uint32_t>(g_bs,BS_ENTITY); if(id && id!=g_forgeId){ g_forgeId=id; logf("queue: forge entity %u",id); } }
+    if(active){
+        uint32_t id=F<uint32_t>(g_bs,BS_ENTITY); if(id && id!=g_forgeId){ g_forgeId=id; logf("queue: forge entity %u",id); }
+        uintptr_t actor=F<uintptr_t>(g_bs,BS_ACTOR);
+        if(actor && kc::readable(actor+0x30,4)) g_queueActorId=F<uint32_t>(actor,0x30);
+    }
     if(s==1) g_menuSeen=now;
     if(g_lastSt==1 && s!=1){   // the recipe menu closed: with a piece chosen (2..20) or without (3 = closed, 21 = leaving)
         if(s>=2 && s<=20){ clear_result_modal_capture(); g_batchAuto=g_ctl.chosen(recipeId(g_m)); }
@@ -895,7 +945,8 @@ static bool install_native_modal_close(const kc::Image& im){
 }
 
 struct QFound { uintptr_t page, make, ctor, rows, strFromC, strFree, strAssign;
-                uintptr_t canCraft, craft, uiMgr, start, mgStart, focus, flashCall, apseVt, focused; };
+                uintptr_t canCraft, craft, uiMgr, start, mgStart, focus, flashCall, apseVt, focused;
+                uintptr_t forgeManager, componentLookup, gameContext; };
 static bool resolve_queue(kc::Resolver& R, QFound& q){
     int before=R.fails;
     q.page=R.find("recipe page",SIG_PAGE);
@@ -928,25 +979,125 @@ static bool resolve_restart(kc::Resolver& R, QFound& q){
     q.start=R.find("forge start",SIG_START);
     q.mgStart=R.branch("minigame start",q.start? q.start+ST_MGSTART : 0);
     if(q.mgStart) R.verify("minigame start",q.mgStart,SIG_MG_START);
+    const char* interactionSig="48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 48 8B FA 48 8B D9 E8 ?? ?? ?? ?? 48 8B CB 48 8B F0 E8 ?? ?? ?? ?? 44 0F B6 4F 04 41 83 E9 02";
+    uintptr_t interaction=R.find("native forge interaction",interactionSig);
+    q.forgeManager=R.branch("forge component manager",interaction?interaction+0x15:0);
+    if(q.forgeManager) R.verify("forge manager accessor",q.forgeManager,"48 83 EC 28 E8 ?? ?? ?? ?? 48 8B 88 28 01 00 00 48 8B 01 48 83 C4 28 48 FF 60 38");
+    q.gameContext=R.branch("game context",q.forgeManager?q.forgeManager+4:0);
+    if(q.gameContext) R.verify("game context accessor",q.gameContext,"40 53 48 83 EC 20 8B 0D ?? ?? ?? ?? 65 48 8B 04 25 58 00 00 00 BA 18 00 00 00");
+    q.componentLookup=R.branch("forge component lookup",interaction?interaction+0x4C:0);
+    if(q.componentLookup) R.verify("component lookup",q.componentLookup,"48 89 5C 24 18 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 30 41 0F B6 F8 44 8B E2 4C 8B E9");
+    if(interaction){
+        R.verify("forge lookup arguments",interaction+0x3C,"41 B1 01 C6 44 24 20 00 41 B0 0C 8B D0 48 8B CE E8 ?? ?? ?? ?? 8B 17 48 8B C8");
+        uintptr_t start=R.branch("interaction forge start",interaction+0x56);
+        if(start!=q.start){ ++R.fails; logf("forge interaction start target mismatch"); }
+    }
+    // Independently verify the script caller agrees on lookup ABI/type and start target.
+    uintptr_t script=R.find("script forge interaction","48 89 5C 24 08 57 48 83 EC 30 48 8B 49 60 49 8B C0 49 8B D9 C6 44 24 20 00 48 8B FA 41 B1 01 8B D0 41 B0 0C E8 ?? ?? ?? ?? 8B D3 48 8B C8 E8");
+    if(script){
+        if(R.branch("script component lookup",script+0x24)!=q.componentLookup ||
+           R.branch("script forge start",script+0x2E)!=q.start){ ++R.fails; logf("forge script targets mismatch"); }
+    }
+    uintptr_t playerPath=R.find("native current-player lookup","E8 ?? ?? ?? ?? 48 8B 48 08 48 8B 01 FF 90 00 02 00 00 48 8B 4F 60 41 B1 01 41 B0 06 C6 44 24 20 00 8B 50 30 E8 ?? ?? ?? ?? 8B D3 48 8B C8 E8");
+    if(playerPath && (R.branch("player game context",playerPath)!=q.gameContext ||
+       R.branch("player component lookup",playerPath+0x24)!=q.componentLookup)){
+        ++R.fails; logf("native current-player lookup targets mismatch");
+    }
     return R.fails==before;
 }
 static bool queue_key(){   // F9 while nothing is being forged: in the recipe menu it starts / resumes the queue
     if(!g_queue || !g_m || st()!=1) return false;
     if(g_ctl.running()){ g_ctl.pause("stopped with the key"); return true; }
     if(g_ctl.q.pieces()<=0) return false;
-    if(!g_canSwitch){ g_game.say("AutoForge queue: pick a queued recipe and craft it - this game version can't switch recipes for you"); return true; }
+    if(!g_canSwitch){ g_game.say("AutoForge queue: pick a queued recipe and craft it - this game version can't switch recipes for you"); g_game.note(fq::N_PICK_CRAFT); return true; }
     g_ctl.start_in_menu(); return true;
+}
+
+// ---- driving the queue while the forge update is silent (the result dialog is up) ----
+// Observed live (2026-11-03 00:24): the log goes quiet at the quench - no forge update runs while the game's item
+// dialog is open, so a close requested from inside that update could never happen.  The game's message loop does keep
+// running, so the queue's post-quench phases are also ticked from there (msgpump.h), but only while the forge update
+// has been silent for PUMP_SILENT_MS; when it runs, it drives the queue as before and this stays out of the way.
+static const uint64_t PUMP_SILENT_MS=400;
+static uint64_t g_lastUpdateMs=0;          // g_clock() at the last forge update
+static bool g_pumpActive=false;            // the message-loop tick is driving the queue right now
+static kc::MainPump g_pump;
+static CRITICAL_SECTION g_cs;              // the queue controller is touched by the forge update and the message-loop tick
+static uint64_t g_pumpStatusT=0;
+static bool pump_phase(){ fq::Phase p=g_ctl.ph; return p==fq::WaitEnd || p==fq::Restarting; }
+static bool pump_want(){                   // helper thread, cheap: should the window thread get a tick now?
+    if(!g_queue || g_dead || !pump_phase()) return false;
+    uint64_t now=g_clock();
+    if(now-g_lastUpdateMs<PUMP_SILENT_MS) return false;
+    if(now-g_pumpStatusT>=3000){             // visible even if the tick never arrives (hook not delivering)
+        g_pumpStatusT=now;
+        logf("pump: phase '%s', forge update silent %llu ms, posted %ld, delivered %ld, dialog A=%p B=%p live=%d",fq::phase_name(g_ctl.ph),
+             (unsigned long long)(now-g_lastUpdateMs),(long)g_pump.posts,(long)g_pump.ticks,
+             g_modalSlotA?(void*)*g_modalSlotA:nullptr,g_modalSlotB?(void*)*g_modalSlotB:nullptr,active_result_modal()?1:0);
+    }
+    return true;
+}
+static void pump_drive(uint64_t now){
+    const bool firstPump=!g_pumpActive;
+    if(firstPump){
+        g_pumpActive=true;
+        logf("pump: forge update silent %llu ms in phase '%s' - queue driven from the game's message loop (thread %lu)",
+             (unsigned long long)(now-g_lastUpdateMs),fq::phase_name(g_ctl.ph),GetCurrentThreadId());
+    }
+    // A completed forge session can retire its C_Blacksmithing object before
+    // the native "Smithing successful" modal has closed. The result dialog is
+    // separately captured at its verified native Open callsite and can safely
+    // close without dereferencing that retired forge object.
+    const bool reachable=bs_valid();
+    if(firstPump && !reachable){
+        const bool mapped=g_bs && kc::readable(g_bs,8);
+        const uintptr_t actualVt=mapped ? *(uintptr_t*)g_bs : 0;
+        logf("pump: forge component unavailable during result: old=%p mapped=%d vt=%p expected=%p; use captured item modal independently",
+             (void*)g_bs,mapped?1:0,(void*)actualVt,(void*)g_bsVt);
+    }
+    bool active=false; int s=-1;
+    if(reachable){
+        uintptr_t m=F<uintptr_t>(g_bs,BS_MODEL);
+        active=F<uint8_t>(g_bs,BS_ACTIVE)!=0;
+        if(active && m && kc::readable(m,M_WP+8)){ g_m=m; s=F<uint8_t>(m,M_STATE); }
+    }
+    // When unreachable, use unknown state/inactive, not an immediate pause.
+    // Ctl::WaitEnd still verifies that the actual captured result dialog is
+    // active and fires the proper native close handler once. Only after it
+    // disappears may the controller consider starting the next piece.
+    // g_game.restart() separately requires a fresh, valid forge object.
+    static int lastS=-2; static bool lastA=false; static uintptr_t lastD=0;
+    uintptr_t dlg=active_result_modal();
+    if(s!=lastS || active!=lastA || dlg!=lastD){
+        lastS=s; lastA=active; lastD=dlg;
+        logf("pump: forge state %d, session %s, result dialog %p, forge object %s",
+             s,active?"open":"closed",(void*)dlg,reachable?"reachable":"retired/unreachable");
+    }
+    fq::Phase ph=g_ctl.ph;
+    g_ctl.tick(s,active);
+    if(g_ctl.ph!=ph) logf("queue: %s -> %s (state %d, forge %s, from the message loop)",fq::phase_name(ph),fq::phase_name(g_ctl.ph),s,active?"open":"closed");
+}
+static void pump_tick(){                   // runs on the game's window thread, between frames
+    if(!g_queue || g_dead || !pump_phase()) return;
+    uint64_t now=g_clock();
+    if(now-g_lastUpdateMs<PUMP_SILENT_MS) return;
+    EnterCriticalSection(&g_cs);
+    __try{ pump_drive(now); }
+    __except(EXCEPTION_EXECUTE_HANDLER){ logf("pump: fault 0x%08lX while driving the queue - paused",GetExceptionCode()); g_ctl.ph=fq::Off; g_ctl.pieceAuto=false; }
+    LeaveCriticalSection(&g_cs);
 }
 
 static void UpdateHook(void* self,float dt){
     pOrigUpdate(self,dt);
     if(g_dead) return;
+    g_lastUpdateMs=g_clock();
+    if(g_pumpActive){ g_pumpActive=false; logf("pump: forge update is running again"); }
     uintptr_t bs=(uintptr_t)self;
     __try{
         uintptr_t m=F<uintptr_t>(bs,BS_MODEL);
         if(g_watch) watch(bs,m);
         if(bs!=g_bs||m!=g_m){ if(g_ph!=Idle) logf("session changed -> idle"); g_ph=Idle; g_bs=bs; g_m=m; g_lastSt=-1; }
-        if(g_queue) queue_tick(m? F<uint8_t>(m,M_STATE) : -1);
+        if(g_queue){ EnterCriticalSection(&g_cs); __try{ queue_tick(m? F<uint8_t>(m,M_STATE) : -1); }__finally{ LeaveCriticalSection(&g_cs); } }
         if(g_nativeModalClosedThisTick){
             g_nativeModalClosedThisTick=false;
             return; // native completion may have released the forge model
@@ -967,12 +1118,26 @@ static bool resolve(kc::Resolver& R, Found& f){
 }
 #ifdef KC_DEVTOOLS
 extern "C" __declspec(dllexport) int KC_SelfTest(HMODULE game, uintptr_t* out){   // offline check (tools/selftest)
+    FILE* previousLog=kc::g_log; kc::g_log=stdout;
     kc::Resolver R; R.im.load(game); Found f{}; QFound q{}; bool ok=resolve(R,f); ok=resolve_queue(R,q) && ok;
     ok=resolve_switch(R,q) && ok; ok=resolve_restart(R,q) && ok;
     ok=check_native_result(R.im) && ok;
     uintptr_t* p=(uintptr_t*)&f; size_t n=0; for(size_t i=0;i<sizeof f/8;i++) out[n++]=p[i];
     p=(uintptr_t*)&q; for(size_t i=0;i<sizeof q/8;i++) out[n++]=p[i];
+    kc::g_log=previousLog;
     return ok? (int)n : -R.fails;
+}
+// Offline audit of the item-dialog capture (tools/hookaudit.cpp): applies the real call-site patches to the mapped,
+// never-executed game image and reports where they point.  out: A site, A trampoline, A slot, B site, B trampoline,
+// B slot, Open, close handler.
+extern "C" __declspec(dllexport) int KC_HookAudit(HMODULE game, uintptr_t* out){
+    kc::Resolver R; R.im.load(game);
+    if(!install_native_modal_close(R.im)) return 0;
+    const uintptr_t b=R.im.base;
+    const uintptr_t sites[2]={b+MODAL_CALL_A,b+MODAL_CALL_B}; volatile uintptr_t* slots[2]={g_modalSlotA,g_modalSlotB};
+    for(int i=0;i<2;i++){ out[i*3]=sites[i]; out[i*3+1]=kc::rel32(sites[i]+1); out[i*3+2]=(uintptr_t)slots[i]; }
+    out[6]=b+MODAL_RVA_OPEN; out[7]=(uintptr_t)pNativeItemClose;
+    return 8;
 }
 // Offline forge simulator hooks (tools/forgesim.cpp): a fake C_Blacksmithing/model/workpiece in plain memory.
 extern "C" __declspec(dllexport) void KC_SimInit(uintptr_t bs, void* workmap, uint64_t (*clock)(), int flipAt, const char* logPath){
@@ -986,6 +1151,7 @@ extern "C" __declspec(dllexport) int KC_SimTick(){ tick(0.02f); return (int)g_ph
 static HMODULE g_self=nullptr;
 static DWORD WINAPI Init(LPVOID){
     kc::init(g_self,"kcd2_autoforge");
+    InitializeCriticalSection(&g_cs);
     g_key.vk=kc::ini_key("Forge",VK_F9);
     g_flipAtPct=std::min(95,std::max(0,kc::ini_int("Options","FlipAt",50)));
     g_watch=kc::ini_int("Options","WatchForge",0)!=0;
@@ -997,7 +1163,7 @@ static DWORD WINAPI Init(LPVOID){
     const bool autoDismiss=kc::ini_int("Options","QueueAutoDismissResult",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v2.0.0-test (game ts 0x%08X) flip at %d%%%s%s",R.im.timestamp,g_flipAtPct,g_watch?", forge watch on (read-only)":"",g_queue?", recipe queue on":"");
+    logf("start v2.0.1-test native-reacquire (game ts 0x%08X) flip at %d%%%s%s",R.im.timestamp,g_flipAtPct,g_watch?", forge watch on (read-only)":"",g_queue?", recipe queue on":"");
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pWorkMap=f.workmap;
@@ -1011,7 +1177,11 @@ static DWORD WINAPI Init(LPVOID){
             pCanCraft=(CanCraft_t)q.canCraft; pCraft=(Craft_t)q.craft; pUiMgr=(UiMgr_t)q.uiMgr; pFlashCall=(FlashCall_t)q.flashCall; g_apseVt=q.apseVt;
             g_canSwitch=true;
         }
-        if(g_canSwitch && resolve_restart(R,q)){ pStartForge=(StartForge_t)q.start; g_canRestart=true; }
+        if(g_canSwitch && resolve_restart(R,q)){
+            pStartForge=(StartForge_t)q.start; pForgeManager=(UiMgr_t)q.forgeManager;
+            pComponentLookup=(ComponentLookup_t)q.componentLookup; pGameContext=(UiMgr_t)q.gameContext;
+            g_canRestart=true;
+        }
         R.fails=fails;
         if(g_queue && g_canSwitch && g_canRestart && autoDismiss)
             g_nativeModalReady=install_native_modal_close(R.im);
@@ -1026,9 +1196,14 @@ static DWORD WINAPI Init(LPVOID){
              kc::key_name(g_plus.vk,kp,sizeof kp),kc::key_name(g_minus.vk,km,sizeof km),kc::key_name(g_clear.vk,kc2,sizeof kc2),
              g_canSwitch?"on":"OFF (pick each queued recipe yourself)", g_ctl.autoContinue?"on":(g_autoContinue?"OFF (not supported)":"off (AutoContinue=0)"));
     }
+    g_bsVt=f.vt;
     void** slot=&((void**)f.vt)[19];
     pOrigUpdate=(Update_t)f.update;
     kc::write_ptr(slot,(void*)&UpdateHook);
+    if(g_queue && g_ctl.autoContinue){       // the post-quench steps need a tick that survives the result dialog
+        g_pump.tick=pump_tick; g_pump.want=pump_want; g_pump.log=kc::logf;
+        if(!g_pump.start(g_self)) logf("pump: could not start - the result screen has to be closed by hand");
+    }
     char kn[16]; logf("ready (%s at the forge)",kc::key_name(g_key.vk,kn,sizeof kn));
     return 0;
 }

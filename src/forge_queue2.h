@@ -14,6 +14,41 @@
 
 namespace fq {
 
+// HUD notices.  The game resolves every SendInfoText string as a localization key ("@key"); plain text shows up with
+// a stray "@" before each word.  So the mod ships its own keys (Localization/<Language>_xml.pak, written by
+// tools/package.py and tools/install_forge_loc.py from this list) and the HUD only ever gets "@taf_..." keys.
+// X(enum name, key, English text).  Keep each text short; no "@" and no XML special characters.
+#define FQ_NOTE_LIST(X) \
+    X(N_STARTED,    "taf_started",    "AutoForge: queue started") \
+    X(N_DONE,       "taf_done",       "AutoForge: queue finished") \
+    X(N_PAUSED,     "taf_paused",     "AutoForge: queue paused - F9 resumes") \
+    X(N_CLEARED,    "taf_cleared",    "AutoForge: queue cleared") \
+    X(N_SKIPPED,    "taf_skipped",    "AutoForge: skipped - not enough materials") \
+    X(N_NOTHING,    "taf_nothing",    "AutoForge: nothing left to make") \
+    X(N_NO_MORE,    "taf_no_more",    "AutoForge: not enough materials for another") \
+    X(N_QUEUE_FULL, "taf_queue_full", "AutoForge: the queue is full") \
+    X(N_USE_FORGE,  "taf_use_forge",  "AutoForge: use the forge to continue") \
+    X(N_PICK_CRAFT, "taf_pick_craft", "AutoForge: craft a queued recipe to start") \
+    X(N_CLOSE_RESULT, "taf_close_result", "AutoForge: close the result screen (Esc), then press F9")
+enum Note {
+#define X(e, k, t) e,
+    FQ_NOTE_LIST(X)
+#undef X
+    N_COUNT
+};
+inline const char* note_key(Note n) {
+    static const char* K[] = {
+#define X(e, k, t) k,
+        FQ_NOTE_LIST(X)
+#undef X
+    };
+    return (n >= 0 && n < N_COUNT) ? K[n] : "taf_paused";
+}
+// "AutoForge: item N of M" is key "taf_item_N_M" for 1 <= N <= M <= FQ_PIECE_MAX; larger queues show "taf_item_next".
+#define FQ_PIECE_MAX 24
+#define FQ_PIECE_TEXT "AutoForge: item %d of %d"
+#define FQ_PIECE_NEXT_TEXT "AutoForge: next item"
+
 constexpr int MAXQ = 16, MAXROWS = 12, MAXMAT = 64, IDLEN = 96, NAMELEN = 96;
 
 inline void copy(char* d, size_t cap, const char* s) { if (!cap) return; size_t i = 0; if (s) for (; s[i] && i + 1 < cap; i++) d[i] = s[i]; d[i] = 0; }
@@ -134,7 +169,9 @@ struct Game {
     virtual bool restart() = 0;                             // the game's forge start (what using the forge calls)
     virtual bool result_open() = 0;                         // finished workpiece state, not an arbitrary menu
     virtual bool dismiss_result() = 0;                     // request the game's registered native modal 'close' input handler (NOT an Esc key)
-    virtual void say(const char* line) = 0;                 // log + optional notice
+    virtual void say(const char* line) = 0;                 // log line only (never shown on the HUD)
+    virtual void note(Note n) = 0;                          // short HUD notice (the mod's own localization key)
+    virtual void piece_note(int n, int of) = 0;             // HUD: "item N of M"
     virtual ~Game() {}
 };
 
@@ -145,14 +182,19 @@ inline const char* phase_name(Phase p) {
 }
 
 // Timings (ms).
-constexpr uint64_t MENU_SETTLE = 700, FOCUS_TIMEOUT = 3000, CONFIRM_TIMEOUT = 2500, END_DELAY = 1500, RESTART_TIMEOUT = 6000;
+constexpr uint64_t MENU_SETTLE = 700, FOCUS_TIMEOUT = 3000, CONFIRM_TIMEOUT = 2500, END_DELAY = 1500, RESTART_TIMEOUT = 6000,
+    RESULT_READ_MS = 2500,      // the result dialog stays readable this long before it is closed
+    RESULT_WAIT_MS = 25000,     // from the quench: how long to wait for the dialog to appear / be closable
+    CLOSE_SETTLE_MS = 15000,   // after the close: how long the game may take to leave the forge session
+    RESTART_WINDOW_MS = 8000,  // allow a retired forge component to reappear after the modal closes
+    RESTART_POLL_MS = 900;     // don't repeatedly call the start handler every pump tick
 
 struct Ctl {
     Queue q; Game* g = nullptr; Phase ph = Off; uint64_t t = 0; int cur = -1;
     bool autoContinue = true; bool autoDismiss = false;
     bool pieceAuto = false;  // pieceAuto: autoforge.cpp starts the forging autopilot
-    bool dismissTried = false;
-    bool sawInactive = false; uint64_t inactiveT = 0;
+    bool dismissTried = false; uint64_t dismissT = 0, modalT = 0;
+    bool sawInactive = false; uint64_t inactiveT = 0, lastRestartTry = 0;
     char lastPaused[160] = { 0 };
 
     bool running() const { return ph != Off; }
@@ -160,14 +202,17 @@ struct Ctl {
         char b[400]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b, fmt, a); va_end(a); if (g) g->say(b);
     }
     void go(Phase p) { ph = p; t = g->now(); }
-    void pause(const char* why) {
+    void pause(const char* why, Note n = N_PAUSED) {
         if (ph == Off) return;
-        ph = Off; pieceAuto = false; dismissTried = false; copy(lastPaused, sizeof lastPaused, why);
+        ph = Off; pieceAuto = false; dismissTried = false; modalT = 0; lastRestartTry = 0;
+        copy(lastPaused, sizeof lastPaused, why);
         say("AutoForge queue: paused - %s (%d left; F9 in the recipe menu resumes, Delete clears)", why, q.pieces());
+        if (g) g->note(n);
     }
     void finish() {
         say("AutoForge queue: done, %d made", q.made);
-        q.clear(); ph = Off; pieceAuto = false; dismissTried = false;
+        if (g) g->note(N_DONE);
+        q.clear(); ph = Off; pieceAuto = false; dismissTried = false; modalT = 0; lastRestartTry = 0;
     }
     // F9 in the recipe menu.
     bool start_in_menu() {
@@ -175,6 +220,7 @@ struct Ctl {
         if (ph == Off) { q.started = q.pieces(); q.made = 0; }
         char lb[300]; q.line(lb, sizeof lb);
         say("AutoForge queue: started, %d items (%s)", q.pieces(), lb);
+        if (g) g->note(N_STARTED);
         ph = WaitMenu; t = g->now() - MENU_SETTLE; return true;
     }
 
@@ -206,8 +252,9 @@ struct Ctl {
                 }
                 if (c == 0) {
                     say("AutoForge queue: skipped %s - not enough materials (%d not made)", it.title, it.qty);
+                    g->note(N_SKIPPED);
                     q.erase(cur); go(WaitMenu); t = now - MENU_SETTLE;
-                    if (q.next() < 0) { say("AutoForge queue: nothing left that can be made"); q.clear(); ph = Off; }
+                    if (q.next() < 0) { say("AutoForge queue: nothing left that can be made"); g->note(N_NOTHING); q.clear(); ph = Off; }
                     return;
                 }
                 pause("the game's craft check could not be read"); return;
@@ -223,34 +270,44 @@ struct Ctl {
             return;
         case Forging: return;
         case WaitEnd:
-            // The game opens its native modal_dialog_item result screen after quench.
-            // On this specific state only, invoke its registered native close handler.
-            // No synthetic Esc key: it can dismiss the wrong menu.
-            if (active) {
+            // After the quench the game opens its native item dialog ("Smithing successful") and stops updating the
+            // forge while it is open, so this also runs from the message loop then (autoforge.cpp), not only from the
+            // forge update.  Once the dialog is really up, wait a moment (so it can be read), then call the game's own
+            // registered 'close' input handler for it - what Esc does.  No synthetic key.
+            if (active || g->result_open()) {
                 sawInactive = false;
-                if (autoContinue && autoDismiss && !dismissTried
-                    && now-t >= 3200 && g->result_open()) {
-                    dismissTried = true;
-                    if (!g->dismiss_result()) {
-                        pause("could not request the game's result close; dismiss manually with Esc");
-                        return;
+                if (!dismissTried && autoContinue && autoDismiss && g->result_open()) {
+                    if (!modalT) { modalT = now; say("AutoForge queue: result screen is up"); }
+                    if (now - modalT >= RESULT_READ_MS) {
+                        dismissTried = true; dismissT = now;
+                        if (!g->dismiss_result()) { pause("could not request the game's result close; close it with Esc", N_CLOSE_RESULT); return; }
+                        say("AutoForge queue: requested native result-screen close");
                     }
-                    say("AutoForge queue: requested native result-screen close");
+                    return;
                 }
-                if (now-t >= 16000) {
-                    pause("result screen did not close; press Esc once and restart queue from the recipe menu");
-                }
+                uint64_t limit = dismissTried ? dismissT + CLOSE_SETTLE_MS : t + RESULT_WAIT_MS;
+                if (now >= limit)
+                    pause(dismissTried ? "the forge did not move on after the result screen closed; press Esc once, then F9"
+                                       : "result screen did not appear or could not be closed; press Esc once, then F9", N_CLOSE_RESULT);
                 return;
             }
             if (!sawInactive) { sawInactive = true; inactiveT = now; return; }
             if (now - inactiveT < END_DELAY) return;
-            sawInactive = false;
-            if (!autoContinue) { say("AutoForge queue: use the forge to go on (%d left)", q.pieces()); go(WaitUser); return; }
-            if (g->restart()) { go(Restarting); return; }
-            say("AutoForge queue: use the forge to go on (%d left) - the game did not reopen it", q.pieces());
-            go(WaitUser); return;
+            // Keep sawInactive/inactiveT across retries, otherwise every
+            // failed start resets the timeout and loops forever.
+            if (!autoContinue) { sawInactive=false; say("AutoForge queue: use the forge to go on (%d left)", q.pieces()); g->note(N_USE_FORGE); go(WaitUser); return; }
+            // After the modal's completion callback, the old C_Blacksmithing
+            // instance can still be gone for a few frames. Give the game time
+            // to restore/recreate it; never call pStartForge on a stale pointer.
+            if (!lastRestartTry || now - lastRestartTry >= RESTART_POLL_MS) {
+                lastRestartTry=now;
+                if (g->restart()) { sawInactive=false; go(Restarting); return; }
+            }
+            if (now-inactiveT < RESTART_WINDOW_MS) return;
+            say("AutoForge queue: use the forge to go on (%d left) - no reachable forge after result closed", q.pieces());
+            g->note(N_USE_FORGE); sawInactive=false; go(WaitUser); return;
         case Restarting:
-            if (now - t > RESTART_TIMEOUT) { say("AutoForge queue: use the forge to go on (%d left)", q.pieces()); go(WaitUser); }
+            if (now - t > RESTART_TIMEOUT) { say("AutoForge queue: use the forge to go on (%d left)", q.pieces()); g->note(N_USE_FORGE); go(WaitUser); }
             return;
         case WaitUser: case Off: return;
         }
@@ -263,9 +320,10 @@ struct Ctl {
             if (ph != Off) pause("another recipe was chosen");
             return false;
         }
-        if (ph == Off) { q.started = q.pieces(); q.made = 0; say("AutoForge queue: started, %d items", q.pieces()); }
-        cur = i; go(Forging); pieceAuto = true;
+        if (ph == Off) { q.started = q.pieces(); q.made = 0; say("AutoForge queue: started, %d items", q.pieces()); g->note(N_STARTED); }
+        cur = i; go(Forging); pieceAuto = true; modalT = 0; dismissTried = false;
         say("AutoForge queue: %d of %d - %s", q.made + 1, q.made + q.pieces(), q.it[i].title);
+        g->piece_note(q.made + 1, q.made + q.pieces());
         return true;
     }
     // The menu closed without a recipe (Esc / walked away).
@@ -277,7 +335,7 @@ struct Ctl {
         q.made++; if (--q.it[i].qty <= 0) q.erase(i);
         pieceAuto = false;
         if (q.pieces() <= 0) { finish(); return; }
-        sawInactive = false; dismissTried = false; go(WaitEnd);
+        sawInactive = false; dismissTried = false; modalT = 0; lastRestartTry=0; go(WaitEnd);
     }
     // F9 during a piece.
     void stopped() { if (ph != Off) pause("stopped with the key"); }

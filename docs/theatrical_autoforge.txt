@@ -1,4 +1,5 @@
-THEATRICAL AUTOFORGE 1.1.2 - Kingdom Come: Deliverance II
+THEATRICAL AUTOFORGE 2.0.1-test - Kingdom Come: Deliverance II
+PRIVATE RELEASE CANDIDATE - public release pending approval
 by Flubbermunchkin
 
 Henry forges the piece himself, stroke by stroke, while you watch. The mod plays the
@@ -23,7 +24,19 @@ INSTALL
           (you should end up with <game>\Mods\theatrical_autoforge\KCSE\Plugins\kcd2_autoforge.dll).
   Uninstall: delete that folder.
 
-HOW TO USE
+MULTI-RECIPE QUEUE (enabled in this candidate's supplied INI)
+  On the game's forge recipe page, select each recipe and use + / - to set its
+  amount. Numpad + / - also work. Delete clears the queue. The page shows queue
+  material totals; additions are refused when the whole queue cannot be supplied.
+  Press F9 once to start. The game checks and crafts each recipe normally.
+  Between pieces the native result remains readable briefly, then closes through
+  its own handler. The current player forge component is reacquired before the
+  next native forge start: retired forge pointers are never reused.
+  F9 pauses automation; unexpected states pause safely. Resume from the recipe
+  page. Queue=0 restores single-piece operation. Do not replace DLLs while the
+  game is running; back up existing configuration before installing.
+
+HOW TO USE (single piece)
   1. At a forge, choose a blueprint as usual and wait until Henry is standing at the forge
      (or at the anvil).
   2. Press F9. Press F9 again at any time to stop and take over by hand.
@@ -34,6 +47,10 @@ SETTINGS  (Mods\theatrical_autoforge\KCSE\Plugins\kcd2_autoforge.ini)
   [Options] FlipAt=50       turn the piece over once at this % completion (0 = only when a side is
                             worked out, as in 1.0.0). The "NoFlip" download is the same mod
                             with FlipAt=0.
+            Queue=1         multi-recipe queue (source fallback is 0)
+            AutoContinue=1  reopen the forge between queued pieces
+            QueueAutoDismissResult=1  close intermediate native result dialogs
+            QueueNotices=1  HUD status using bundled localization keys
             DebugLog=0      1 = detailed log for bug reports
 
 TESTED
@@ -60,6 +77,15 @@ BUG REPORTS
   DebugLog=1 set in the .ini, and say what you were forging.
 
 CHANGES
+  2.0.1-test - Multi-recipe queue; native result dismissal driven while the forge
+               update is suspended; safe native forge-component reacquisition.
+             - HUD notices use bundled localization, not literal SendInfoText.
+             - In-game verified: two queues completed, 3 and 4 items (7 total),
+               on Steam build 15693. Tested DLL SHA256:
+               479f7d814efb6faeb5b54aa67e40b1fca94783193c23e795b13aa2eef14dfea3
+             - Offline checks are separate from that gameplay evidence. Broader
+               game versions, interruptions and non-default settings still need
+               additional coverage. Candidate retains its actual test version.
   1.1.2  - Fixed: the last stroke sometimes did not finish the piece (completion showed 99.9%
            and the mod waited instead of striking once more).
          - Fixed: sparkless duds and weak strokes on axes after 1.1.0. Henry now strikes the
