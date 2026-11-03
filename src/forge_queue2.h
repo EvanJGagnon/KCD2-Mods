@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include "forge_localized_names_en.h"
 
 namespace fq {
 
@@ -65,7 +66,7 @@ struct Queue {
     bool fits_one_more(const char* id, const Row* r, int nr, char* why, size_t cap) const {
         for (int k = 0; k < nr; k++) {
             int h = have(r[k].name), need = total(r[k].name, id, 1, r, nr);
-            if (h >= 0 && need > h) { if (why) snprintf(why, cap, "%s %d/%d", r[k].name, need, h); return false; }
+            if (h >= 0 && need > h) { if (why) snprintf(why, cap, "%s %d/%d", fqlabel::display(r[k].name), need, h); return false; }
         }
         return true;
     }
@@ -87,35 +88,38 @@ struct Queue {
     }
     void erase(int i) { for (int k = i; k + 1 < n; k++) it[k] = it[k + 1]; n--; }
 
-    // Text added to the game's recipe description while something is queued.
+    // Compact summary for the game's narrow recipe-book description field.
+    // All material arithmetic still uses original game localization IDs.
     void summary(char* out, size_t cap, int running) const {
-        out[0] = 0;
-        if (running) cat(out, cap, "Forging %d / %d\n", made + 1, made + pieces());
-        cat(out, cap, "CRAFT QUEUE (%d items)\n", pieces());
-        const int recipeLines = n < 6 ? n : 6;
-        for (int i = 0; i < recipeLines; i++) cat(out, cap, "  x%d %s\n", it[i].qty, it[i].title);
-        if (n > recipeLines) cat(out, cap, "  +%d more recipes\n", n - recipeLines);
-        cat(out, cap, "\nMATERIALS (need / have)\n");
-        int shown = 0; char seen[MAXMAT][NAMELEN]; int ns = 0;
-        for (int i = 0; i < n; i++) for (int k = 0; k < it[i].nrows; k++) {
-            const char* m = it[i].rows[k].name; bool dup = false;
-            for (int j = 0; j < ns; j++) if (!strcmp(seen[j], m)) dup = true;
-            if (dup || ns >= MAXMAT) continue;
-            copy(seen[ns++], NAMELEN, m);
-            int need = total(m), h = have(m);
-            if (shown++ >= 8) continue; // keep the narrow book description readable
-            cat(out, cap, "  %s: %d / %d", m, need, h < 0 ? 0 : h);
-            if (h >= 0 && need > h) cat(out, cap, " (SHORT %d)", need - h);
-            cat(out, cap, "\n");
+        out[0]=0;
+        if(running)cat(out,cap,"Forging %d / %d\n",made+1,started?started:pieces());
+        cat(out,cap,"QUEUE (%d items)\n",pieces());
+        const int showRecipes=n<3?n:3;
+        for(int i=0;i<showRecipes;i++)cat(out,cap,"%s x%d\n",fqlabel::display(it[i].title),it[i].qty);
+        if(n>showRecipes)cat(out,cap,"+%d recipes\n",n-showRecipes);
+        cat(out,cap,"MATERIALS (need/have)\n");
+        int shown=0,ns=0;char seen[MAXMAT][NAMELEN];
+        for(int i=0;i<n;i++)for(int k=0;k<it[i].nrows;k++){
+            const char* key=it[i].rows[k].name;bool dup=false;
+            for(int j=0;j<ns;j++)if(!strcmp(seen[j],key))dup=true;
+            if(dup||ns>=MAXMAT)continue;
+            copy(seen[ns++],NAMELEN,key);
+            int need=total(key),owned=have(key);
+            if(shown++>=5)continue;
+            cat(out,cap,"%s %d/%d",fqlabel::display(key),need,owned<0?0:owned);
+            if(owned>=0 && need>owned)cat(out,cap," SHORT %d",need-owned);
+            cat(out,cap,"\n");
         }
-        if (shown > 8) cat(out, cap, "  +%d more materials\n", shown - 8);
+        if(shown>5)cat(out,cap,"+%d more materials\n",shown-5);
     }
-    // One line for the log / on-screen notice.
+    // Concise notification (avoid raw localization identifiers).
     void line(char* out, size_t cap) const {
-        out[0] = 0;
-        for (int i = 0; i < n; i++) cat(out, cap, "%s%s x%d", i ? ", " : "", it[i].title, it[i].qty);
-        if (!n) cat(out, cap, "empty");
+        out[0]=0;
+        for(int i=0;i<n;i++)cat(out,cap,"%s%s x%d",
+            i?", ":"",fqlabel::display(it[i].title),it[i].qty);
+        if(!n)cat(out,cap,"empty");
     }
+
 };
 
 // What the controller needs from the game (autoforge.cpp: the game's own functions; tests: a fake forge).
@@ -129,7 +133,7 @@ struct Game {
     virtual bool craft() = 0;                               // the game's craft handler (what the craft key calls)
     virtual bool restart() = 0;                             // the game's forge start (what using the forge calls)
     virtual bool result_open() = 0;                         // finished workpiece state, not an arbitrary menu
-    virtual bool dismiss_result() = 0;                     // request game's ItemSelection.Close UI action (NOT an Esc key)
+    virtual bool dismiss_result() = 0;                     // request game's ApseModalDialog.CloseItemDialog UI action (NOT an Esc key)
     virtual void say(const char* line) = 0;                 // log + optional notice
     virtual ~Game() {}
 };

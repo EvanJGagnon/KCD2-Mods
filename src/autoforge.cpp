@@ -565,10 +565,12 @@ static SsUpdate_t g_ssUpdate=nullptr; static SsExec_t g_ssExec=nullptr;
 static char g_noticeBuf[2][260]; static volatile LONG g_noticeSeq=0, g_noticeDone=0;
 static volatile LONG g_resultCloseQueued=0;
 static bool g_noticesEnabled=true;
-// This is the actual game UI element, from IPL_GameData.pak / Libs/UI/UIElements/ItemSelection.xml.
-// It exposes Close(Force: bool) and fires OnClosed to the game. This is deliberately
-// not an input event / Esc key; it runs only after queued quench completion.
-static const char* NATIVE_RESULT_CLOSE = "UIAction.CallFunction('ItemSelection', -1, 'Close', false)";
+// Codex traced the actual Smithing successful popup to the native
+// C_UIModalDialogItem / modal_dialog_item flow (WHGame.dll 0x2B14E80).
+// Its XML UI element is ApseModalDialog, NOT ItemSelection.
+// CloseItemDialog may only close the visible Flash window: wait for real
+// forge-state confirmation and fail closed if the game doesn't transition.
+static const char* NATIVE_RESULT_CLOSE = "UIAction.CallFunction('ApseModalDialog', -1, 'CloseItemDialog')";
 static void notice(const char* text){
     if(!g_ssExec || !g_noticesEnabled) return;
     LONG n=g_noticeSeq+1; char* b=g_noticeBuf[n&1]; size_t k=0;
@@ -589,7 +591,7 @@ static void* SsUpdateHook(void* self,void* a,void* b,void* c){
         __try {
             bool accepted=g_ssExec(self,NATIVE_RESULT_CLOSE,strlen(NATIVE_RESULT_CLOSE),
                 "TheatricalAutoForgeResultClose",nullptr);
-            logf("queue: native ItemSelection.Close requested through game's UIAction; script accepted=%d",(int)accepted);
+            logf("queue: native ApseModalDialog.CloseItemDialog requested through game's UIAction; script accepted=%d",(int)accepted);
         } __except(EXCEPTION_EXECUTE_HANDLER) {
             logf("queue: native result close call failed; queue will require manual Esc");
         }
@@ -701,11 +703,12 @@ static void page_content(uintptr_t obj, uintptr_t content, uintptr_t recipe, uin
     if(!page_open() || g_ctl.q.pieces()<=0) return;   // changes only ever happen on the forge's own recipe menu
     if(qty>=1){
         for(int i=0;i<n;i++){ uintptr_t r=b+i*ROW_SIZE; F<int>(r,ROW_NEED)*=qty; }
-        char title[200]; sprintf_s(title,"%s x%d",g_pageTitle,qty); setstr(content+PC_NAME,title);
+        char title[200]; sprintf_s(title,"%s x%d",fqlabel::display(g_pageTitle),qty); setstr(content+PC_NAME,title);
     }
-    static char desc[2400]; char sum[1600]; g_ctl.q.summary(sum,sizeof sum,g_ctl.running());
-    const char* d0=cstr(content+PC_DESC); sprintf_s(desc,"%s%s%s",strcmp(d0,"?")?d0:"",strcmp(d0,"?")&&*d0?"\n\n":"",sum);
-    setstr(content+PC_DESC,desc);
+    // Never concatenate raw localized description keys or a long lore string
+    // with the queue. The book has a narrow, height-limited description area.
+    char sum[800]; g_ctl.q.summary(sum,sizeof sum,g_ctl.running());
+    setstr(content+PC_DESC,sum);
 }
 static void** MakeContentHook(void** out, uintptr_t recipe, uintptr_t soul){
     void** r=pMakeContent(out,recipe,soul);
@@ -732,7 +735,7 @@ static void page_keys(int s){
     char why[200]={0}, ql[300];
     if(plus){
         int q=g_ctl.q.add(g_pageRecipe,g_pageTitle,g_pageRows,g_pageN,(void*)g_pageRecipeObj,why,sizeof why);
-        if(q<0){ char m[300]; sprintf_s(m,"AutoForge queue: no more %s - %s",g_pageTitle,why); g_game.say(m); return; }
+        if(q<0){ char m[300]; sprintf_s(m,"AutoForge queue: no more %s - %s",fqlabel::display(g_pageTitle),why); g_game.say(m); return; }
     } else { if(g_ctl.q.qty(g_pageRecipe)<=0) return; g_ctl.q.remove_one(g_pageRecipe); }
     g_ctl.q.line(ql,sizeof ql);
     logf("recipe page: %c %s -> x%d; queue: %s",plus?'+':'-',g_pageRecipe,g_ctl.q.qty(g_pageRecipe),ql);
@@ -897,7 +900,7 @@ static DWORD WINAPI Init(LPVOID){
         g_ctl.g=&g_game; g_ctl.autoContinue=g_autoContinue && g_canRestart;
         if(g_queue) install_notices(R.im); // required for result UI close even if notices are hidden
         g_ctl.autoDismiss=autoDismiss && g_ssExec!=nullptr;
-        logf("queue: result screen auto-close %s (ItemSelection.Close; never sends Esc)",
+        logf("queue: result screen auto-close %s (ApseModalDialog.CloseItemDialog; never sends Esc)",
              g_ctl.autoDismiss?"enabled":"off (manual Esc still available)");
         char kp[16],km[16],kc2[16];
         if(!g_queue) logf("queue: off (this game version is not supported for the queue)");

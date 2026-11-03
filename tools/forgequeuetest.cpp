@@ -99,6 +99,16 @@ struct Fake : fq::Game {
 static void setup(Fake& f, fq::Ctl& c) { c = fq::Ctl(); c.g = &f; f.ctl = &c; }
 static bool said(Fake& f, const char* part) { for (auto& l : f.lines) if (l.find(part) != std::string::npos) return true; return false; }
 
+static void t_localization() {
+    printf("localized item names: original game identifiers remain untouched, visible names never show @ keys\\n");
+    CHECK(!strcmp(fqlabel::display("@ui_nm_huntingSwordBasic"), "Hunting sword"), "hunting sword translated");
+    CHECK(!strcmp(fqlabel::display("@ui_nm_axeBattle01"), "Bearded axe"), "battle axe display name");
+    CHECK(!strcmp(fqlabel::display("@ui_nm_bsmt_ironBad"), "Metal"), "simple metal label");
+    CHECK(!strcmp(fqlabel::display("@ui_nm_bsmt_hardware"), "Fasteners"), "simple fasteners label");
+    const char* unknown=fqlabel::display("@ui_nm_unknownNamedThing");
+    CHECK(unknown[0] != '@' && strstr(unknown, "unknown"), "unknown keys do not leak raw tokens: %s",unknown);
+}
+
 static void t_model() {
     printf("model: totals, shared materials, refusal, summary\n");
     Fake f; fq::Ctl c; setup(f, c);
@@ -117,12 +127,12 @@ static void t_model() {
     CHECK(f.user_plus("horseshoe", why) == -1, "horseshoe refused: metal 7/6 (%s)", why);
     CHECK(c.q.pieces() == 6, "6 pieces");
     char s[1600]; c.q.summary(s, sizeof s, 0);
-    CHECK(strstr(s, "x2 Hunting Sword") && strstr(s, "x1 Falchion") && strstr(s, "x3 Basilard"), "summary lists items: %s", s);
-    CHECK(strstr(s, "Scrap Steel: 10 / 11") != nullptr, "summary steel: %s", s);
+    CHECK(strstr(s, "Hunting Sword x2") && strstr(s, "Falchion x1") && strstr(s, "Basilard x3"), "summary lists items: %s", s);
+    CHECK(strstr(s, "Scrap Steel 10/11") != nullptr, "summary steel: %s", s);
     CHECK(strstr(s, "SHORT") == nullptr, "no shortage yet");
     f.inv["Fastening"] = 3; f.user_pick("falchion");   // a page shows fewer than queued: shortage shown
     c.q.summary(s, sizeof s, 0);
-    CHECK(strstr(s, "Fastening: 4 / 3 (SHORT 1)") != nullptr, "shortage shown: %s", s);
+    CHECK(strstr(s, "Fastening 4/3 SHORT 1") != nullptr, "shortage shown: %s", s);
     CHECK(c.q.remove_one("falchion") == 0 && c.q.find("falchion") < 0, "- removes");
     CHECK(c.q.pieces() == 5, "5 pieces");
 }
@@ -248,6 +258,7 @@ static void t_native_result_close() {
     CHECK(said(fail,"dismiss manually with Esc"),"explicit manual Esc fallback logged");
 }
 int main() {
+    t_localization();
     t_native_result_close();
     t_model(); t_full_run(); t_run_out(); t_focus_fails(); t_restart_refused(); t_cancel(); t_no_autocontinue(); t_other_recipe();
     printf(g_fail ? "%d FAILED\n" : "ALL PASSED\n", g_fail);
