@@ -22,6 +22,10 @@ cl /nologo /O2 tools\routetest.cpp /Foout\obj\ /Feout\dev\routetest.exe || exit 
 cl /nologo /O2 tools\markertest.cpp /Foout\obj\ /Feout\dev\kc_markertest.exe || exit /b 1
 cl /nologo /O2 /EHsc tools\sharpsim.cpp /Foout\obj\ /Feout\dev\sharpsim.exe || exit /b 1
 cl /nologo /O2 /EHsc tools\forgesim.cpp /Foout\obj\ /Feout\dev\forgesim.exe || exit /b 1
+cl /nologo /O2 /EHsc /Isrc tools\forgequeuetest.cpp /Foout\obj\ /Feout\dev\forgequeuetest.exe || exit /b 1
+cl /nologo /O2 /EHsc /MT /Isrc tools\pumptest.cpp /Foout\obj\ /Feout\dev\pumptest.exe user32.lib || exit /b 1
+cl /nologo /std:c++17 /EHa /O2 /MT /Isrc tools\restarttest.cpp /Foout\obj\ /Feout\dev\restarttest.exe user32.lib kernel32.lib || exit /b 1
+cl /nologo /O2 tools\hookaudit.cpp /Foout\obj\ /Feout\dev\hookaudit.exe || exit /b 1
 del /q out\*.exp out\*.lib out\dev\*.exp out\dev\*.lib 2>nul
 for %%m in (autolockpick autodice autopickpocket autofollow automarksman) do (
   call theatrical\%%m\build.bat || exit /b 1

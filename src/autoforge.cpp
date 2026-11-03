@@ -9,6 +9,8 @@
 // Game code is found by RTTI + signature at startup (kcd2_common.h); on a mismatch nothing is hooked.
 // Log: kcd2_autoforge.log next to the DLL.
 #include "kcd2_common.h"
+#include "forge_queue2.h"
+#include "msgpump.h"
 #include <cmath>
 #include <algorithm>
 
@@ -45,9 +47,9 @@ enum { ST_TOFORGE=5, ST_TOANVIL=6, ST_HARDEN=7, ST_FORGE=8, ST_ANVIL=11, ST_FLIP
 enum { A_TOANVIL=0, A_TOFORGE=1, A_TOHARDEN=2, A_BELLOWS=4, A_MOVEHAMMER=5, A_FLIP=6, A_STARTSTROKE=7, A_FINISHSTROKE=8, A_SETZONE=9 };
 
 static uintptr_t g_bs=0, g_m=0;
-// batch state ([Options] Queue=1; see the recipe page section below)
-static char g_batchRecipe[96]={0}; static int g_batchTotal=0, g_batchLeft=0; static bool g_batchAuto=false;
-static void batch_cancel(const char* why); static void batch_quenched();
+// queue ([Options] Queue=1; see the recipe page section below): g_batchAuto = forge the piece the game just set up
+static bool g_batchAuto=false;
+static void batch_cancel(const char* why); static void batch_quenched(); static bool queue_key();
 static void** actvt(){ return *(void***)(g_bs+BS_ACTIONS); }
 static void* actthis(){ return (void*)(g_bs+BS_ACTIONS); }
 static void act0(int s){ ((void(*)(void*))actvt()[s])(actthis()); }
@@ -339,11 +341,11 @@ static void start(){
 static void tick(float dt){
     uint64_t now=g_clock();
     bool pressed=g_key.pressed();
-    if(pressed){ if(g_ph==Idle) start(); else { stop("user key"); batch_cancel("stopped with the key"); } return; }
+    if(pressed){ if(g_ph==Idle){ if(!queue_key()) start(); } else { stop("user key"); batch_cancel("stopped with the key"); } return; }
     if(g_ph==Idle){
         int s0=st();
         if(g_batchAuto && F<uintptr_t>(g_m,M_WP) && (s0==ST_FORGE||s0==ST_ANVIL)){
-            logf("batch: forging piece %d of %d %s",g_batchTotal-g_batchLeft+1,g_batchTotal,g_batchRecipe); start();
+            logf("queue: forging %s by itself",recipeId(g_m)); start();
         }
         return;
     }
@@ -490,71 +492,305 @@ static void watch(uintptr_t bs,uintptr_t m){
     g_wBs=bs; g_wM=m; g_wSt=s; g_wHard=h;
 }
 
-// ---------------- [Options] Queue=1: forge a batch, chosen on the game's own recipe page ----------------
-// On the forge's recipe menu, + and - set how many of the shown recipe to make.  The game's own recipe page then
-// shows it: "[Hunting Sword] Common x2" with every required amount doubled.  The page data is the game's
-// C_UIFlashContentRecipeBlacksmith (built by 0x119F710 for the crafting page 0x119F030); we only change that display
-// copy after the game made it.  The owned counts on it are the game's own, so the most you can pick is what the
-// game says you can afford.  Recipe data, material checks and material use are not touched: each piece is still
-// picked and confirmed in the game's menu, which checks and takes the materials as usual.  Pieces of a batch are
-// forged without F9; after each quench the page shows how many are left for that recipe.
+// ---------------- [Options] Queue=1: AutoForge 2.0 multi-recipe queue on the game's own recipe page ----------------
+// On the forge's recipe menu, + and - set how many of the shown recipe to queue; other recipes keep their amounts, so
+// one queue can hold "Hunting Sword x2, Falchion x1, Basilard x3".  The game's own recipe page shows it: the title
+// gets " xN", every required amount is N pieces' worth, and the description gets the whole queue with the material
+// totals, what you have and any shortage.  + is refused when a material of the whole queue would run short.
+// The page data is the game's C_UIFlashContentRecipeBlacksmith (built by 0x119F710 for the crafting page 0x119F030);
+// only that display copy is changed, after the game made it.  Recipe data, material checks and material use are not
+// touched.
+// Running the queue (forge_queue2.h): each piece is chosen through the game's own steps, never with key presses:
+//   - the game's recipe list is told to focus the next recipe (Flash FocusRecipe, as the game itself does it),
+//   - the mod waits until the game's list really has it focused (GetFocusedItem, what the craft action reads) and the
+//     game drew its page,
+//   - the game's own craft check (0x119FC54, the same check that enables the craft key) must say yes,
+//   - then the game's craft handler runs (0x11A072C, what the craft key calls) and the piece is forged as usual.
+// After the quench the game ends the forge session.  With AutoContinue=1 the mod then starts the forge again with the
+// game's own start (0xB674A4, what using the forge calls; it does its own distance / can-use checks).  If anything
+// does not go as expected, the queue pauses and says why; nothing is forced.
 static const char* SIG_PAGE = "48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC 70 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 F0 48 8B 41 08 4C 8B F9 41 8A D8 4C 8B E2 48 8B 88 90 00 00 00 4C 8B A9 68 06 00 00 E8 ?? ?? ?? ?? 45 32 F6 41 8A F6 84 DB 0F 85 ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? 49 8B D4 FF 50 10 4D 8B C5 48 8D 4D C0 48 8B D0 48 8B F0 E8 ?? ?? ?? ?? 48 8D 55 C0 48 8D 4D E0 E8 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? 48 8B D8 48 8D 4D B0 E8 ?? ?? ?? ?? 49 8D BF F0 01 00 00 4C 8B C3 48 8B CF 48 8D 55 B0 E8 ?? ?? ?? ?? 48 8D 4D B0 E8 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? 48 8D 4D B0 E8 ?? ?? ?? ??";   // 0x119F030 crafting page: show recipe (this, CryString id [callee frees], type 0 = blacksmith)
 static const char* SIG_PAGE_MAKE = "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 20 83 3D ?? ?? ?? ?? 00 49 8B F0 48 8B EA 48 8B F9 75 ?? E8 ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 8D 54 24 30 45 33 C0 41 8D 48 70 FF D0";   // 0x119F710 make_shared<C_UIFlashContentRecipeBlacksmith>(recipe, soul)
 static const char* SIG_PAGE_CTOR = "40 55 53 56 57 41 54 41 56 41 57 48 8D 6C 24 90 48 81 EC 70 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 60 48 8B 02 4C 8B E1 48 8B CA 4D 8B F0 4C 8B FA FF 50 08 48 8B D0 48 8D 4C 24 38 E8 ?? ?? ?? ?? 48 8B D8 49 8B CF 49 8B 07 FF 10 45 33 C0 48 8D 4C 24 20 48 8B D0 E8 ?? ?? ?? ?? 4C 8B C3 48 8B D0 49 8B CC E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 49 8D 4C 24 18 49 89 04 24 E8 ?? ?? ?? ?? 49 8D 4C 24 20 E8 ?? ?? ?? ?? 49 C7 44 24 28 00 00 00 00 49 C7 44 24 30 00 00 00 00 49 C7 44 24 38 00 00 00 00 49 C7 44 24 48 00 00 00 00 49 C7 44 24 50 00 00 00 00 49 C7 44 24 58 00 00 00 00 E8 ?? ?? ?? ?? 49 8B 07 49 8B CF FF 50 10 48 8B D0 49 8D 4C 24 18 E8 ?? ?? ?? ??";   // 0x119F7E8 page content ctor: name CryString +0x10, ingredient rows vector +0x48
+static const char* SIG_PAGE_DESC = "49 8D 4C 24 20 E8";   // ctor+0xF6: Desc CryString +0x20 (rttr property "Desc") assigned from the recipe
 static const char* SIG_PAGE_ROWS = "E8 ?? ?? ?? ?? 48 8B 4E 08 48 8D 54 24 58 E8 ?? ?? ?? ?? 48 8B 13 48 8B CB 8B F8 FF 52 08 48 8B 76 10 48 8D 54 24 20 48 8D 4C 24 40 8B D8 E8 ?? ?? ?? ?? 48 8D 54 24 30 48 8D 4C 24 48 E8 ?? ?? ?? ?? 48 8B 56 50 4C 8D 44 24 40 89 7C 24 50 89 5C 24 54 48 3B 56 58 74 ?? E8 ?? ?? ?? ?? 48 83 46 50 18";   // 0x1F5BEC5 ingredient row {name, icon, owned +0x10, required +0x14}, 0x18 bytes
-static const uintptr_t PG_CALL=0x74, PG_STR=0x94, PG_STRFREE=0xB3, MK_CTOR=0x81, CT_ASSIGN=0xD8;   // call sites inside those functions
-static const uintptr_t PC_NAME=0x10, PC_ROWS=0x48, ROW_SIZE=0x18, ROW_OWNED=0x10, ROW_NEED=0x14;
+// running the queue (all optional: without them the queue still works, you pick each queued recipe yourself)
+static const char* SIG_CANCRAFT = "48 89 5C 24 18 48 89 74 24 20 57 48 81 EC 10 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 84 24 00 01 00 00 0F 57 C0";   // 0x119FC54 can craft (recipe, soul): what enables the craft key
+static const char* SIG_CRAFT = "48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 20 48 8B F1 E8 ?? ?? ?? ?? 48 8D 54 24 30 48 8B 88 B0 01 00 00 48 8B 01 FF 50 60 E8 ?? ?? ?? ?? 48 8D 7E 68 48 8B 07 48 8B CF FF 50 60 48 8D 54 24 30 48 8B D8 48 8D 4C 24 38 E8 ?? ?? ?? ?? 48 8B D0 48 8B CB E8 ?? ?? ?? ?? 48 8B 07 48 8B CF FF 50 60 B2 02 38 90 88 00 00 00 74 ?? 48 8D 88 90 00 00 00 88 90 88 00 00 00 E8 ?? ?? ?? ?? 48 8B CE E8 ?? ?? ?? ?? 48 8B 4C 24 30";   // 0x11A072C the craft action's handler (C_Blacksmithing*): reads the list's focused recipe, closes the menu, state 2
+static const char* SIG_START = "48 89 5C 24 10 48 89 74 24 20 55 57 41 56 48 8B EC 48 83 EC 30 8B DA 48 8B F1 48 8B 51 18 8B CB 8B 52 30 E8 ?? ?? ?? ?? 84 C0 0F 84 ?? ?? ?? ?? 48 8B 06 48 8B CE FF 90 90 00 00 00 84 C0 0F 84 ?? ?? ?? ??";   // 0xB674A4 forge start (C_Blacksmithing*, forge entity id): Blacksmithing.StartMinigame / using the forge
+static const char* SIG_MG_START = "48 89 5C 24 08 57 48 83 EC 40 80 79 2C 00 8B FA 48 8B D9 0F 85 ?? ?? ?? ?? 8B D7 C6 43 2C 01 48 8B CB 89 7B 28";   // 0x9F0970 minigame base start: active flag +0x2C, entity id +0x28
+static const char* SIG_FOCUS = "48 89 5C 24 18 57 48 83 EC 20 48 8B 41 10 48 8B D9 41 B1 01 45 33 C0 41 0F B6 D1 48 8B 88 E0 05 00 00 48 8B 41 10 48 83 C1 10 FF 50 38 48 8B 43 10 48 8D 4C 24 38 44 0F B6 43 08 48 8B D3 48 8B B8 E0 05 00 00 E8 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? 48 8B D8 48 8D 4C 24 30 E8 ?? ?? ?? ?? 4C 8B C3 48 8D 54 24 30 48 8D 8F 90 1E 00 00 E8 ?? ?? ?? ?? 48 8D 4C 24 30";   // 0x1F48DF0 the game focusing a recipe in the crafting list (Flash "FocusRecipe" on C_UIApse+0x1E90)
+static const char* SIG_FLASHCALL = "48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 60 48 8B 01 49 8B F0 4C 8B F2 48 8B D9 FF 50 60 48 8B 7B 48 48 85 FF 74 ??";   // 0x514788 call a Flash function with one string (element, &name, &arg)
+static const char* SIG_FOCUSED = "40 53 48 83 EC 20 48 8B DA 48 81 C1 80 1E 00 00";   // 0x11A07D0 I_UIApse vtbl[12]: focused recipe id of the crafting list (+0x1E80 from the interface)
+static const uintptr_t PG_CALL=0x74, PG_STR=0x94, PG_STRFREE=0xB3, PG_CANCRAFT=0xE6, MK_CTOR=0x81, CT_ASSIGN=0xD8, CT_DESC=0xF6;   // call sites inside those functions
+static const uintptr_t CR_UIMGR=0x12, ST_MGSTART=0x91, FO_FLASHCALL=0x6D;
+static const uintptr_t PC_NAME=0x10, PC_DESC=0x20, PC_ROWS=0x48, ROW_SIZE=0x18, ROW_OWNED=0x10, ROW_NEED=0x14;
+static const uintptr_t UI_APSE=0x1B0, APSE_LIST=0x1E80, BS_ACTIVE=0x2C, BS_ENTITY=0x28;
 typedef void** (*MakeContent_t)(void**, uintptr_t, uintptr_t);
 typedef void (*ShowPage_t)(uintptr_t, void*, uint8_t);
 typedef void (*StrFromC_t)(void*, const char*);
 typedef void (*StrFree_t)(void*);
 typedef void (*StrAssign_t)(void*, const void*);
+typedef bool (*CanCraft_t)(uintptr_t, uintptr_t);
+typedef void (*Craft_t)(uintptr_t);
+typedef bool (*StartForge_t)(uintptr_t, uint32_t);
+typedef uintptr_t (*UiMgr_t)();
+typedef bool (*FlashCall_t)(uintptr_t, void*, void*);
+typedef void* (*Focused_t)(uintptr_t, void*);
 static MakeContent_t pMakeContent=nullptr; static ShowPage_t pShowPage=nullptr;
 static StrFromC_t pStrFromC=nullptr; static StrFree_t pStrFree=nullptr; static StrAssign_t pStrAssign=nullptr;
+static CanCraft_t pCanCraft=nullptr; static Craft_t pCraft=nullptr; static StartForge_t pStartForge=nullptr;
+static UiMgr_t pUiMgr=nullptr; static FlashCall_t pFlashCall=nullptr; static uintptr_t g_apseVt=0;
+// Vanilla interaction 0x86BFC8 and script StartMinigame 0x2ED032C both use
+// manager.GetComponent(playerEntity, 0x0C, create=true, finalFlag=false).
+// The lookup owns construction/registration; never construct or scan the heap ourselves.
+using ComponentLookup_t = uintptr_t (*)(uintptr_t,uint32_t,uint8_t,bool,bool);
+static ComponentLookup_t pComponentLookup=nullptr;
+static UiMgr_t pForgeManager=nullptr, pGameContext=nullptr;
+static uint32_t g_queueActorId=0;
 static volatile uintptr_t* g_pageSlot=nullptr;    // the hook stub stores the page object (r15 in 0x119F030) here
-static bool g_queue=false;
+static bool g_queue=false, g_canSwitch=false, g_canRestart=false, g_autoContinue=true;
 static uint64_t g_menuSeen=0;                     // last tick the forge showed its recipe menu (state 1)
 static uintptr_t g_pageObj=0, g_pageVt=0;         // crafting page that showed the current recipe
-static char g_pageRecipe[96]={0}; static int g_pageQty=1, g_pageCap=0;
-static char g_pageLog[400]={0};
-static kc::Hotkey g_plus, g_minus, g_padPlus, g_padMinus;
-static int g_lastSt=-1;
+static char g_pageRecipe[fq::IDLEN]={0}, g_pageTitle[fq::NAMELEN]={0}; static uint64_t g_pageT=0;
+static fq::Row g_pageRows[fq::MAXROWS]; static int g_pageHave[fq::MAXROWS]; static int g_pageN=0;
+static uintptr_t g_pageRecipeObj=0, g_pageSoul=0;
+static char g_pageLog[600]={0};
+static kc::Hotkey g_plus, g_minus, g_padPlus, g_padMinus, g_clear;
+static int g_lastSt=-1; static uint32_t g_forgeId=0;
+static fq::Ctl g_ctl;
 
 static const char* cstr(uintptr_t cryString){ const char* s=cryString? *(const char**)cryString : nullptr; return (s && kc::readable((uintptr_t)s,1))? s : "?"; }
 static bool page_open(){ return g_menuSeen && g_clock()-g_menuSeen<1500; }
+static void setstr(uintptr_t cryString,const char* text){ void* s=nullptr; pStrFromC(&s,text); pStrAssign((void*)cryString,&s); pStrFree(&s); }
+
+// ---- optional on-screen notices: Game.SendInfoText through the script system (same pattern as the other mods) ----
+typedef void* (*SsUpdate_t)(void*,void*,void*,void*);
+typedef bool  (*SsExec_t)(void*,const char*,size_t,const char*,void*);
+static const char* SIG_SS_UPDATE = "48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 30 48 8B 3D ?? ?? ?? ?? 48 8B F1 33 D2 0F 29 74 24 20";   // vtbl[1] 0xA26B94
+static const char* SIG_SS_EXEC   = "48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 83 EC 50 48 8B F9 48 89 50 E8"; // vtbl[6] ExecuteBuffer 0x4D4484
+static SsUpdate_t g_ssUpdate=nullptr; static SsExec_t g_ssExec=nullptr;
+static const int NOTICE_RING=6;
+static char g_noticeBuf[NOTICE_RING][96]; static volatile LONG g_noticeSeq=0, g_noticeDone=0;
+static bool g_noticesEnabled=true;
+// Genuine "close" input handler registered by C_UIModalDialogItem::Open:
+// at game RVA 0x2B14E80 it registers an action named "close", whose
+// callback RVA 0x1F53E90 invokes C_UIModalDialogItem::Close (0x2B11BC4)
+// and then its completion delegate. A Flash CloseItemDialog call bypasses
+// that native callback and can leave the result screen in place.
+// Two verified native Open callsites capture the in-game modal owner.
+// No input injection or synthetic Esc is used.
+using NativeItemCloseEvent_t = void (*)(void*);
+static NativeItemCloseEvent_t pNativeItemClose=nullptr;
+static volatile uintptr_t* g_modalSlotA=nullptr;
+static volatile uintptr_t* g_modalSlotB=nullptr;
+static bool g_nativeModalReady=false;
+static bool g_nativeModalClosedThisTick=false;
+static volatile LONG g_nativeCloseGuard=0;
+// HUD text: the game resolves every SendInfoText string as a localization key, exactly as its own scripts use it
+// (Game.SendInfoText('@reputation_penance_paid', false)); free text comes out as "@word @word".  So only "@taf_*" keys
+// are sent, and their English text ships in Localization/<Language>_xml.pak (fq::FQ_NOTE_LIST in forge_queue2.h).
+// A short ring keeps notices that are raised between two script updates (the script system is idle while the game
+// is paused, e.g. behind the result dialog); the oldest is dropped only if it fills up.
+static void notice_key(const char* key){
+    if(!g_ssExec || !g_noticesEnabled || !key || !*key) return;
+    LONG n=g_noticeSeq+1; if(n-g_noticeDone>=NOTICE_RING) g_noticeDone=n-NOTICE_RING+1;   // full: drop the oldest
+    char* b=g_noticeBuf[n%NOTICE_RING];
+    sprintf_s(b,sizeof g_noticeBuf[0],"Game.SendInfoText(\"@%s\", false)",key);
+    InterlockedExchange(&g_noticeSeq,n);
+}
+static void* SsUpdateHook(void* self,void* a,void* b,void* c){
+    void* r=g_ssUpdate(self,a,b,c);
+    if(g_noticeDone!=g_noticeSeq && g_ssExec){          // one line per script update
+        LONG n=++g_noticeDone; const char* line=g_noticeBuf[n%NOTICE_RING];
+        __try { g_ssExec(self,line,strlen(line),"TheatricalAutoForge",nullptr); }
+        __except(EXCEPTION_EXECUTE_HANDLER){ g_ssExec=nullptr; logf("queue notices: script error - notices off"); }
+    }
+    return r;
+}
+static bool hook_ss_update(uintptr_t vt, uintptr_t expect){   // compare-exchange: other mods hook the same slot
+    void** slot=&((void**)vt)[1];
+    DWORD old; if(!VirtualProtect(slot,8,PAGE_READWRITE,&old)) return false;
+    void* cur=(void*)expect; bool ok=false;
+    for(int i=0;i<8 && !ok;i++){
+        g_ssUpdate=(SsUpdate_t)cur;
+        void* was=InterlockedCompareExchangePointer(slot,(void*)&SsUpdateHook,cur);
+        if(was==cur) ok=true; else cur=was;
+    }
+    VirtualProtect(slot,8,old,&old);
+    return ok;
+}
+static void install_notices(const kc::Image& im){
+    kc::Resolver R; R.im=im;
+    uintptr_t vt=R.vtable("CScriptSystem",".?AVCScriptSystem@@",0), up=0;
+    uintptr_t cur= vt? ((uintptr_t*)vt)[1] : 0;
+    if(cur && !R.im.in_image(cur)){ if(R.find("CScriptSystem::Update",SIG_SS_UPDATE)) up=cur; }   // another mod hooked it first: chain
+    else up=R.slot("CScriptSystem::Update",vt,1,SIG_SS_UPDATE);
+    uintptr_t ex=R.slot("CScriptSystem::ExecuteBuffer",vt,6,SIG_SS_EXEC);
+    if(!R.ok()){ logf("queue notices: not available in this game version (log only)"); return; }
+    g_ssExec=(SsExec_t)ex;
+    if(!hook_ss_update(vt,up)){ g_ssExec=nullptr; logf("queue notices: could not hook the script system (log only)"); }
+}
+
+// ---- what the queue controller may ask of the game (forge_queue2.h) ----
+static uintptr_t apse_ui(){            // the crafting UI (I_UIApse of C_UIApse) the recipe menu uses
+    if(!pUiMgr) return 0;
+    uintptr_t m=pUiMgr(); if(!m || !kc::readable(m+UI_APSE,8)) return 0;
+    uintptr_t ui=F<uintptr_t>(m,UI_APSE); if(!ui || !kc::readable(ui,8) || *(uintptr_t*)ui!=g_apseVt) return 0;
+    return ui;
+}
+static void clear_result_modal_capture(){
+    if(g_modalSlotA) *g_modalSlotA=0;
+    if(g_modalSlotB) *g_modalSlotB=0;
+    InterlockedExchange(&g_nativeCloseGuard,0);
+}
+static bool native_modal_live(uintptr_t ptr){
+    return ptr && kc::readable(ptr,0xA9) && F<uint8_t>(ptr,0xA8)==1;
+}
+static uintptr_t g_bsVt=0;             // C_Blacksmithing vtable: proves g_bs still is that object when used outside its update
+static bool bs_valid(){ return g_bs && g_bsVt && kc::readable(g_bs,0xC0) && *(uintptr_t*)g_bs==g_bsVt; }
+static uintptr_t active_result_modal(){
+    const uintptr_t a=g_modalSlotA?*g_modalSlotA:0, b=g_modalSlotB?*g_modalSlotB:0;
+    const bool aa=native_modal_live(a), bb=native_modal_live(b);
+    if(aa && bb && a!=b){logf("queue: multiple active result dialog owners - refuse auto-close"); return 0;}
+    return aa?a:(bb?b:0);
+}
+struct ForgeGame : fq::Game {
+    uint64_t now() override { return g_clock(); }
+    bool focus(const char* id) override {
+        if(!g_canSwitch) return false;
+        uintptr_t ui=apse_ui(); if(!ui) { logf("queue: crafting list not found"); return false; }
+        char arg[160]; sprintf_s(arg,"BlacksmithRecipe:%s",id);       // the game's own format (0x119FBD4 "%s:%s")
+        void* n=nullptr; void* a=nullptr; pStrFromC(&n,"FocusRecipe"); pStrFromC(&a,arg);
+        bool ok=pFlashCall(ui+APSE_LIST,&n,&a);
+        pStrFree(&a); pStrFree(&n);
+        logf("queue: asked the game's recipe list to focus %s (%s)",id,ok?"ok":"no Flash object");
+        return ok;
+    }
+    bool focused(char* out,size_t cap) override {
+        out[0]=0; uintptr_t ui=apse_ui(); if(!ui) return false;
+        void* s=nullptr; ((Focused_t)(*(void***)ui)[12])(ui,&s);      // I_UIApse vtbl[12] = 0x11A07D0
+        fq::copy(out,cap,s? cstr((uintptr_t)&s) : ""); if(s) pStrFree(&s);
+        return out[0]!=0;
+    }
+    const char* page_id() override { return g_pageRecipe; }
+    uint64_t page_time() override { return g_pageT; }
+    int can_craft(void* recipe) override {
+        if(!pCanCraft || !recipe || !g_pageSoul || (uintptr_t)recipe!=g_pageRecipeObj) return -1;   // only the recipe the game just drew
+        return pCanCraft((uintptr_t)recipe,g_pageSoul)? 1 : 0;
+    }
+    bool craft() override {
+        if(!pCraft || !g_bs || st()!=1) return false;
+        logf("queue: game craft check passed for %s - running the game's craft action",g_pageRecipe);
+        pCraft(g_bs); return true;
+    }
+    bool restart() override {
+        if(!g_canRestart || !pStartForge || !pComponentLookup || !pForgeManager || !pGameContext ||
+           !g_forgeId || !g_queueActorId || active_result_modal()) return false;
+        // Resolve the CURRENT player just as vanilla's script interaction does (0x2ED02C0).
+        // Do not read BS_ACTOR from g_bs: that entire allocation may already be retired.
+        uintptr_t ctx=pGameContext();
+        if(!ctx || !kc::readable(ctx+8,8)) return false;
+        uintptr_t playerSystem=F<uintptr_t>(ctx,8);
+        if(!playerSystem || !kc::readable(playerSystem,8)) return false;
+        uintptr_t vt=F<uintptr_t>(playerSystem,0);
+        if(!vt || !kc::readable(vt+0x200,8) || !F<uintptr_t>(vt,0x200)) return false;
+        uintptr_t actor=((uintptr_t(*)(uintptr_t))F<uintptr_t>(vt,0x200))(playerSystem);
+        if(!actor || !kc::readable(actor+0x30,4) || F<uint32_t>(actor,0x30)!=g_queueActorId){
+            logf("queue: current player changed/unavailable - refuse forge reacquisition"); return false;
+        }
+        uintptr_t manager=pForgeManager();
+        if(!manager) return false;
+        uintptr_t fresh=pComponentLookup(manager,g_queueActorId,0x0C,true,false);
+        if(!fresh || !g_bsVt || !kc::readable(fresh,0xF0) || F<uintptr_t>(fresh,0)!=g_bsVt ||
+           F<uintptr_t>(fresh,BS_ACTOR)!=actor){
+            logf("queue: native forge component lookup returned no valid player component"); return false;
+        }
+        // Never restart a live session, including one the player opened manually.
+        if(F<uint8_t>(fresh,BS_ACTIVE)){
+            logf("queue: reacquired forge component already active - refuse duplicate start"); return false;
+        }
+        const uintptr_t old=g_bs;
+        bool ok=pStartForge(fresh,g_forgeId);
+        // Start can call into the game and change lifetime. Only publish a still-valid
+        // component after success. UpdateHook will adopt its model on the next update.
+        if(ok && kc::readable(fresh,0xF0) && F<uintptr_t>(fresh,0)==g_bsVt &&
+           F<uint8_t>(fresh,BS_ACTIVE) && F<uint32_t>(fresh,BS_ENTITY)==g_forgeId){
+            g_bs=fresh; g_m=0; g_lastSt=-1;
+            logf("queue: native reacquisition old=%p fresh=%p player=%u; forge %u started (thread %lu)",
+                 (void*)old,(void*)fresh,g_queueActorId,g_forgeId,GetCurrentThreadId());
+            return true;
+        }
+        logf("queue: reacquired forge %p start refused/not active (entity %u)",(void*)fresh,g_forgeId);
+        return false;
+    }
+    // The result dialog is the game's item dialog (C_UIModalDialogItem) that one of the two original Open call sites
+    // just opened (captured owner, active flag +0xA8 == 1).  The controller only asks this in the phase right after
+    // our own piece was quenched, so that is the dialog it means.
+    bool result_open() override {
+        return g_nativeModalReady && active_result_modal()!=0;
+    }
+    bool dismiss_result() override {
+        uintptr_t modal=pNativeItemClose? active_result_modal() : 0;
+        if(!modal){ logf("queue: native result owner not ready or not visible - manual Esc needed"); return false; }
+        if(InterlockedCompareExchange(&g_nativeCloseGuard,1,0)!=0){ logf("queue: native result close already requested"); return false; }
+        // The input system's own "close" callback only reads [context+8] (the dialog) - verified in the game's 0x1F53E90.
+        // It runs C_UIModalDialogItem::Close and then the dialog's completion delegate, i.e. what Esc does; this call
+        // happens on the game's window thread (see msgpump.h), where its input handlers normally run.
+        void* context[2]={nullptr,(void*)modal};
+        g_nativeModalClosedThisTick=true;      // the completion may release the forge model: no autopilot tick after it
+        __try {
+            logf("queue: executing the game's native result close (dialog %p, thread %lu)",(void*)modal,GetCurrentThreadId());
+            pNativeItemClose(context);
+            logf("queue: native result close returned; dialog active flag now %d",native_modal_live(modal)?1:0);
+        } __except(EXCEPTION_EXECUTE_HANDLER) {
+            logf("queue: native result close faulted (0x%08lX); no retry - close it with Esc",GetExceptionCode());
+            return false;
+        }
+        return true;
+    }
+    void say(const char* line) override { logf("%s",line); }
+    void note(fq::Note n) override { notice_key(fq::note_key(n)); }
+    void piece_note(int n,int of) override {
+        char key[40]; if(n>=1 && n<=of && of<=FQ_PIECE_MAX) sprintf_s(key,"taf_item_%d_%d",n,of); else strcpy_s(key,"taf_item_next");
+        notice_key(key);
+    }
+};
+static ForgeGame g_game;
 
 // Runs right after the game built the recipe page data, before the game sends it to the page.
-static void page_content(uintptr_t obj, uintptr_t content, uintptr_t recipe){
+static void page_content(uintptr_t obj, uintptr_t content, uintptr_t recipe, uintptr_t soul){
     if(!content || !recipe) return;
     const char* id=cstr(((uintptr_t(*)(uintptr_t))(*(void***)recipe)[0])(recipe));   // recipe vtbl[0] = id CryString
     uintptr_t b=F<uintptr_t>(content,PC_ROWS), e=F<uintptr_t>(content,PC_ROWS+8);
     int n=(b && e>b && (e-b)%ROW_SIZE==0)? (int)((e-b)/ROW_SIZE) : 0;
-    if(n<1 || n>12 || !kc::readable(b,e-b)){ logf("recipe page: %s has an unexpected material list (%d rows) - left as the game made it",id,n); return; }
-    if(strcmp(id,g_pageRecipe)){
-        strncpy_s(g_pageRecipe,id,_TRUNCATE);
-        g_pageQty=(g_batchLeft>0 && !strcmp(id,g_batchRecipe))? g_batchLeft : 1;
-    }
-    int cap=1<<30; char line[400]; size_t k=0; line[0]=0;
+    if(n<1 || n>fq::MAXROWS || !kc::readable(b,e-b)){ logf("recipe page: %s has an unexpected material list (%d rows) - left as the game made it",id,n); return; }
+    char line[400]; size_t k=0; line[0]=0;
     for(int i=0;i<n;i++){
         uintptr_t r=b+i*ROW_SIZE; int have=F<int>(r,ROW_OWNED), need=F<int>(r,ROW_NEED);
+        if(need<=0 || have<0 || need>100000){ logf("recipe page: %s row %d reads %d/%d - left as the game made it",id,i,have,need); return; }
+        fq::copy(g_pageRows[i].name,fq::NAMELEN,cstr(r)); g_pageRows[i].need=need; g_pageHave[i]=have;
         if(k<sizeof line-80) k+=sprintf_s(line+k,sizeof line-k,"%s%s %d/%d",i?", ":"",cstr(r),have,need);
-        if(need<=0 || have<0 || need>100000){ cap=-1; break; }
-        cap=std::min(cap,have/need);
     }
-    g_pageObj=obj; g_pageVt=obj? *(uintptr_t*)obj : 0; g_pageCap=cap;
-    int qty=(cap>=1)? std::clamp(g_pageQty,1,cap) : 1;
-    if(qty!=g_pageQty) logf("recipe page: %s x%d lowered to x%d (materials for %d)",id,g_pageQty,qty,cap);
-    g_pageQty=qty;
-    char sig[400]; sprintf_s(sig,"%s|%s|%d",id,line,qty);
-    if(strcmp(sig,g_pageLog)){ strcpy_s(g_pageLog,sig); logf("recipe page: %s \"%s\" owned/required: %s -> materials for %d, showing x%d",id,cstr(content+PC_NAME),line,cap,qty); }
-    if(qty<=1 || !page_open()) return;   // changes only ever happen on the forge's own recipe menu
-    for(int i=0;i<n;i++){ uintptr_t r=b+i*ROW_SIZE; F<int>(r,ROW_NEED)*=qty; }
-    char title[200]; sprintf_s(title,"%s x%d",cstr(content+PC_NAME),qty);
-    void* s=nullptr; pStrFromC(&s,title); pStrAssign((void*)(content+PC_NAME),&s); pStrFree(&s);
+    g_pageN=n; fq::copy(g_pageRecipe,fq::IDLEN,id); fq::copy(g_pageTitle,fq::NAMELEN,cstr(content+PC_NAME));
+    g_pageObj=obj; g_pageVt=obj? *(uintptr_t*)obj : 0; g_pageRecipeObj=recipe; g_pageSoul=soul; g_pageT=g_clock();
+    g_ctl.q.page(id,g_pageTitle,g_pageRows,n,g_pageHave,(void*)recipe);
+    int qty=g_ctl.q.qty(id);
+    char sig[600]; sprintf_s(sig,"%s|%s|%d|%d",id,line,qty,g_ctl.q.pieces());
+    if(strcmp(sig,g_pageLog)){ strcpy_s(g_pageLog,sig); logf("recipe page: %s \"%s\" owned/required: %s, queued x%d (queue %d items)",id,g_pageTitle,line,qty,g_ctl.q.pieces()); }
+    if(!page_open() || g_ctl.q.pieces()<=0) return;   // changes only ever happen on the forge's own recipe menu
+    if(qty>=1){
+        for(int i=0;i<n;i++){ uintptr_t r=b+i*ROW_SIZE; F<int>(r,ROW_NEED)*=qty; }
+        char title[200]; sprintf_s(title,"%s x%d",fqlabel::display(g_pageTitle),qty); setstr(content+PC_NAME,title);
+    }
+    // Never concatenate raw localized description keys or a long lore string
+    // with the queue. The book has a narrow, height-limited description area.
+    char sum[800]; g_ctl.q.summary(sum,sizeof sum,g_ctl.running());
+    setstr(content+PC_DESC,sum);
 }
 static void** MakeContentHook(void** out, uintptr_t recipe, uintptr_t soul){
     void** r=pMakeContent(out,recipe,soul);
-    __try{ page_content(g_pageSlot? *g_pageSlot : 0,(uintptr_t)out[0],recipe); }
+    __try{ page_content(g_pageSlot? *g_pageSlot : 0,(uintptr_t)out[0],recipe,soul); }
     __except(EXCEPTION_EXECUTE_HANDLER){ logf("recipe page: fault while adjusting the page - left as the game made it"); }
     return r;
 }
@@ -568,49 +804,42 @@ static bool page_refresh(){
     return true;
 }
 static void page_keys(int s){
-    bool plus=g_plus.pressed(), minus=g_minus.pressed();
+    bool plus=g_plus.pressed(), minus=g_minus.pressed(), clr=g_clear.pressed();
     plus=g_padPlus.pressed()||plus; minus=g_padMinus.pressed()||minus;
-    if(!(plus^minus) || s!=1 || F<uintptr_t>(g_m,M_WP) || !page_open() || !g_pageRecipe[0]) return;
-    int want=g_pageQty+(plus?1:-1);
-    if(want<1){ return; }
-    if(g_pageCap<1 || want>g_pageCap){ logf("recipe page: + ignored, materials for %d %s",g_pageCap<0?0:g_pageCap,g_pageRecipe); return; }
-    g_pageQty=want;
-    logf("recipe page: %c -> x%d %s",plus?'+':'-',want,g_pageRecipe);
+    if(s!=1 || F<uintptr_t>(g_m,M_WP) || !page_open() || !g_pageRecipe[0]) return;
+    if(g_ctl.ph==fq::WaitMenu||g_ctl.ph==fq::Focusing||g_ctl.ph==fq::Confirmed) return;   // the queue is choosing right now
+    if(clr){ if(g_ctl.q.pieces()>0){ g_ctl.q.clear(); g_ctl.ph=fq::Off; g_game.say("AutoForge queue: cleared"); g_game.note(fq::N_CLEARED); page_refresh(); } return; }
+    if(!(plus^minus)) return;
+    char why[200]={0}, ql[300];
+    if(plus){
+        int q=g_ctl.q.add(g_pageRecipe,g_pageTitle,g_pageRows,g_pageN,(void*)g_pageRecipeObj,why,sizeof why);
+        if(q<0){ char m[300]; sprintf_s(m,"AutoForge queue: no more %s - %s",fqlabel::display(g_pageTitle),why); g_game.say(m); g_game.note(strstr(why,"holds")? fq::N_QUEUE_FULL : fq::N_NO_MORE); return; }
+    } else { if(g_ctl.q.qty(g_pageRecipe)<=0) return; g_ctl.q.remove_one(g_pageRecipe); }
+    g_ctl.q.line(ql,sizeof ql);
+    logf("recipe page: %c %s -> x%d; queue: %s",plus?'+':'-',g_pageRecipe,g_ctl.q.qty(g_pageRecipe),ql);
     page_refresh();
 }
-static void batch_cancel(const char* why){
-    if(g_batchLeft>0) logf("batch: cancelled (%s), %d of %d %s not made",why,g_batchLeft,g_batchTotal,g_batchRecipe);
-    g_batchLeft=0; g_batchTotal=0; g_batchRecipe[0]=0; g_batchAuto=false;
-}
-// The game left its recipe menu with a piece chosen (and paid for) through its own menu.
-static void batch_chosen(){
-    const char* id=recipeId(g_m);
-    int qty=(!strcmp(id,g_pageRecipe))? g_pageQty : 1;
-    if(g_batchLeft>0 && !strcmp(id,g_batchRecipe)){
-        if(qty<g_batchLeft){ logf("batch: lowered from %d left to %d on the recipe page",g_batchLeft,qty); g_batchLeft=qty; }
-        logf("batch: piece %d of %d %s chosen in the game's menu",g_batchTotal-g_batchLeft+1,g_batchTotal,id);
-        g_batchAuto=true; return;
+static void batch_quenched(){ if(g_queue) g_ctl.quenched(recipeId(g_m)); }
+static void batch_cancel(const char* why){ (void)why; if(g_queue) g_ctl.stopped(); }
+static void queue_tick(int s){
+    uint64_t now=g_clock();
+    bool active=g_bs && F<uint8_t>(g_bs,BS_ACTIVE)!=0;
+    if(active){
+        uint32_t id=F<uint32_t>(g_bs,BS_ENTITY); if(id && id!=g_forgeId){ g_forgeId=id; logf("queue: forge entity %u",id); }
+        uintptr_t actor=F<uintptr_t>(g_bs,BS_ACTOR);
+        if(actor && kc::readable(actor+0x30,4)) g_queueActorId=F<uint32_t>(actor,0x30);
     }
-    if(g_batchLeft>0) batch_cancel("a different recipe was chosen");
-    if(qty<=1) return;
-    strncpy_s(g_batchRecipe,id,_TRUNCATE); g_batchTotal=g_batchLeft=qty; g_batchAuto=true;
-    logf("batch: x%d %s started (game showed materials for %d); piece 1 of %d",qty,id,g_pageCap,qty);
-}
-static void batch_quenched(){
-    if(g_batchLeft<=0 || strcmp(recipeId(g_m),g_batchRecipe)) return;
-    g_batchLeft--;
-    if(g_batchLeft>0) logf("batch: %d of %d %s done; %d left - pick the recipe in the game's menu and confirm it (the page shows x%d)",
-                           g_batchTotal-g_batchLeft,g_batchTotal,g_batchRecipe,g_batchLeft,g_batchLeft);
-    else { logf("batch: all %d %s done",g_batchTotal,g_batchRecipe); batch_cancel("finished"); }
-}
-static void batch_tick(int s){
-    if(s==1) g_menuSeen=g_clock();
-    if(g_lastSt==1 && s!=1){   // the recipe menu closed: with a piece chosen (2..20) or without (21 = leaving)
-        if(s>=2 && s<=20) batch_chosen();
-        g_pageObj=0; g_pageRecipe[0]=0; g_pageQty=1; g_pageLog[0]=0; g_menuSeen=0;
+    if(s==1) g_menuSeen=now;
+    if(g_lastSt==1 && s!=1){   // the recipe menu closed: with a piece chosen (2..20) or without (3 = closed, 21 = leaving)
+        if(s>=2 && s<=20){ clear_result_modal_capture(); g_batchAuto=g_ctl.chosen(recipeId(g_m)); }
+        else g_ctl.menu_closed();
+        g_pageObj=0; g_pageRecipe[0]=0; g_pageLog[0]=0; g_menuSeen=0; g_pageT=0;
     }
     g_lastSt=s;
-    page_keys(s);
+    if(s>=0) page_keys(s);
+    fq::Phase ph=g_ctl.ph;
+    g_ctl.tick(s,active);
+    if(g_ctl.ph!=ph) logf("queue: %s -> %s (state %d, forge %s)",fq::phase_name(ph),fq::phase_name(g_ctl.ph),s,active?"open":"closed");
 }
 // Hook page for the one call this patches (0x119F030 -> 0x119F710): store r15 (the page), then jump to the hook.
 static uint8_t* alloc_near(uintptr_t target){
@@ -623,8 +852,8 @@ static uint8_t* alloc_near(uintptr_t target){
     return nullptr;
 }
 static bool hook_page(uintptr_t site, uintptr_t factory){
-    if(*(uint8_t*)site!=0xE8 || kc::rel32(site+1)!=factory){ logf("batch: recipe page call is not what this build expects - batches off"); return false; }
-    uint8_t* pg=alloc_near(site); if(!pg){ logf("batch: no memory for the recipe page hook - batches off"); return false; }
+    if(*(uint8_t*)site!=0xE8 || kc::rel32(site+1)!=factory){ logf("queue: recipe page call is not what this build expects - queue off"); return false; }
+    uint8_t* pg=alloc_near(site); if(!pg){ logf("queue: no memory for the recipe page hook - queue off"); return false; }
     g_pageSlot=(volatile uintptr_t*)(pg+0x800);
     uint8_t* p=pg;
     p[0]=0x4C; p[1]=0x89; p[2]=0x3D; *(int32_t*)(p+3)=(int32_t)((uint8_t*)g_pageSlot-(p+7)); p+=7;   // mov [rip+slot], r15
@@ -636,30 +865,243 @@ static bool hook_page(uintptr_t site, uintptr_t factory){
     VirtualProtect((void*)site,5,old,&old); FlushInstructionCache(GetCurrentProcess(),(void*)site,5);
     return true;
 }
-struct QFound { uintptr_t page, make, ctor, rows, strFromC, strFree, strAssign; };
+// Verified on WHGame.dll timestamp 0x6A350E20. These three native paths
+// represent the *same* result-dialog close action that Esc dispatches:
+// Open (0x2B14E80), registered close callback (0x1F53E90), and
+// C_UIModalDialogItem::Close (0x2B11BC4). The callback also invokes the
+// game completion delegate. XML CloseItemDialog alone doesn't.
+static const char* SIG_MODAL_OPEN =
+    "48 8B C4 55 53 56 57 41 54 41 56 41 57 48 8D 68 B1 48 81 EC F0 00 00 00";
+static const char* SIG_MODAL_CLOSE =
+    "48 8B C4 48 89 58 10 48 89 70 18 57 48 83 EC 70 48 8B F1 C6 81 A8 00 00 00 00";
+static const char* SIG_MODAL_ON_CLOSE =
+    "40 53 48 83 EC 20 48 8B 59 08 80 BB A8 00 00 00 00 74 1D 48 8B CB E8 ?? ?? ?? ??";
+static const char* SIG_MODAL_CALLER_A =
+    "4C 8B DC 49 89 5B 08 49 89 73 10 57 48 81 EC 80 00 00 00 8D 42 FD 41 8B F1";
+static const char* SIG_MODAL_CALLER_B =
+    "48 85 FF 0F 84 ?? ?? ?? ?? 41 8B 58 50 48 81 C1 58 02 00 00 0F B6 C2";
+static constexpr uintptr_t MODAL_RVA_OPEN=0x2B14E80, MODAL_RVA_CLOSE=0x2B11BC4,
+    MODAL_RVA_ON_CLOSE=0x1F53E90, MODAL_RVA_CALLER_A=0x2B8E3D8,
+    MODAL_RVA_CALLER_B=0x234192C, MODAL_CALL_A=0x2B8E436,
+    MODAL_CALL_B=0x2341974;
+static bool check_native_result(const kc::Image& im){
+    if(im.timestamp!=0x6A350E20) {
+        logf("queue: native result close disabled: game build changed (ts 0x%08X)",im.timestamp);
+        return false;
+    }
+    kc::Resolver C; C.im=im;
+    const uintptr_t base=im.base;
+    C.verify("native item result open",base+MODAL_RVA_OPEN,SIG_MODAL_OPEN);
+    C.verify("native item result close",base+MODAL_RVA_CLOSE,SIG_MODAL_CLOSE);
+    C.verify("native close input handler",base+MODAL_RVA_ON_CLOSE,SIG_MODAL_ON_CLOSE);
+    C.verify("native result open caller A",base+MODAL_RVA_CALLER_A,SIG_MODAL_CALLER_A);
+    C.verify("native result open caller B",base+MODAL_RVA_CALLER_B,SIG_MODAL_CALLER_B);
+    if(!C.ok())return false;
+    // Actual registered native "close" handler calls the actual Close method.
+    const uintptr_t call=base+MODAL_RVA_ON_CLOSE+0x16;
+    if(*(uint8_t*)call!=0xE8 || kc::rel32(call+1)!=base+MODAL_RVA_CLOSE)return false;
+    // Two distinct callsites can open the item result dialog. Both must be
+    // original direct calls. If another mod has hooked them, do not overwrite.
+    for(uintptr_t at : {base+MODAL_CALL_A,base+MODAL_CALL_B}) {
+        if(*(uint8_t*)at!=0xE8 || kc::rel32(at+1)!=base+MODAL_RVA_OPEN){
+            logf("queue: item dialog caller already modified; automatic dismissal disabled");
+            return false;
+        }
+    }
+    return true;
+}
+// Call-site trampoline captures RCX, the actual C_UIModalDialogItem owner,
+// then tail-jumps to the game's *unmodified* Open function. All arguments,
+// registers and original return address are preserved. Do not hook or invoke
+// any UI API speculatively; this specific callsite is signature-verified.
+static bool hook_native_modal_open(uintptr_t site,uintptr_t original,volatile uintptr_t** capture){
+    uint8_t* pg=alloc_near(site);
+    if(!pg)return false;
+    *capture=(volatile uintptr_t*)(pg+0x800);
+    **capture=0;
+    uint8_t* p=pg;
+    p[0]=0x48; p[1]=0x89; p[2]=0x0D;
+    *(int32_t*)(p+3)=(int32_t)((uintptr_t)*capture-(uintptr_t)(p+7));
+    p+=7;
+    p[0]=0xFF; p[1]=0x25; *(int32_t*)(p+2)=0;
+    *(uint64_t*)(p+6)=(uint64_t)original;
+    FlushInstructionCache(GetCurrentProcess(),pg,0x30);
+    DWORD old=0;
+    if(!VirtualProtect((void*)site,5,PAGE_EXECUTE_READWRITE,&old))return false;
+    *(int32_t*)(site+1)=(int32_t)((uintptr_t)pg-(site+5));
+    VirtualProtect((void*)site,5,old,&old);
+    FlushInstructionCache(GetCurrentProcess(),(void*)site,5);
+    return true;
+}
+static bool install_native_modal_close(const kc::Image& im){
+    if(!check_native_result(im))return false;
+    const uintptr_t b=im.base;
+    // Prevalidated callsites, no speculative addresses or blind key presses.
+    if(!hook_native_modal_open(b+MODAL_CALL_A,b+MODAL_RVA_OPEN,&g_modalSlotA))return false;
+    if(!hook_native_modal_open(b+MODAL_CALL_B,b+MODAL_RVA_OPEN,&g_modalSlotB))return false;
+    pNativeItemClose=(NativeItemCloseEvent_t)(b+MODAL_RVA_ON_CLOSE);
+    logf("queue: native result close registered for both item dialog open paths");
+    return true;
+}
+
+struct QFound { uintptr_t page, make, ctor, rows, strFromC, strFree, strAssign;
+                uintptr_t canCraft, craft, uiMgr, start, mgStart, focus, flashCall, apseVt, focused;
+                uintptr_t forgeManager, componentLookup, gameContext; };
 static bool resolve_queue(kc::Resolver& R, QFound& q){
     int before=R.fails;
     q.page=R.find("recipe page",SIG_PAGE);
     q.make=R.branch("recipe page data",q.page? q.page+PG_CALL : 0);
     if(q.make) R.verify("recipe page data",q.make,SIG_PAGE_MAKE);
     q.ctor=R.branch("recipe page data ctor",q.make? q.make+MK_CTOR : 0);
-    if(q.ctor) R.verify("recipe page data ctor",q.ctor,SIG_PAGE_CTOR);
+    if(q.ctor){ R.verify("recipe page data ctor",q.ctor,SIG_PAGE_CTOR); R.verify("recipe page description",q.ctor+CT_DESC,SIG_PAGE_DESC); }
     q.rows=R.find("recipe page material rows",SIG_PAGE_ROWS);
     q.strFromC=R.branch("string from text",q.page? q.page+PG_STR : 0);
     q.strFree=R.branch("string free",q.page? q.page+PG_STRFREE : 0);
     q.strAssign=R.branch("string assign",q.ctor? q.ctor+CT_ASSIGN : 0);
     return R.fails==before;
 }
+// Optional on top of the page: what lets the queue go on by itself.  Fails only turn that part off.
+static bool resolve_switch(kc::Resolver& R, QFound& q){
+    int before=R.fails;
+    q.canCraft=R.branch("craft check",q.page? q.page+PG_CANCRAFT : 0);
+    if(q.canCraft) R.verify("craft check",q.canCraft,SIG_CANCRAFT);
+    q.craft=R.find("craft action handler",SIG_CRAFT);
+    q.uiMgr=R.branch("UI manager",q.craft? q.craft+CR_UIMGR : 0);
+    q.focus=R.find("recipe list focus",SIG_FOCUS);
+    q.flashCall=R.branch("Flash call",q.focus? q.focus+FO_FLASHCALL : 0);
+    if(q.flashCall) R.verify("Flash call",q.flashCall,SIG_FLASHCALL);
+    q.apseVt=R.vtable("C_UIApse",".?AVC_UIApse@guimodule@wh@@",0x10);
+    if(q.apseVt){ uintptr_t f=((uintptr_t*)q.apseVt)[12]; if(R.verify("crafting list focused recipe",f,SIG_FOCUSED)) q.focused=f; }
+    return R.fails==before;
+}
+static bool resolve_restart(kc::Resolver& R, QFound& q){
+    int before=R.fails;
+    q.start=R.find("forge start",SIG_START);
+    q.mgStart=R.branch("minigame start",q.start? q.start+ST_MGSTART : 0);
+    if(q.mgStart) R.verify("minigame start",q.mgStart,SIG_MG_START);
+    const char* interactionSig="48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 48 8B FA 48 8B D9 E8 ?? ?? ?? ?? 48 8B CB 48 8B F0 E8 ?? ?? ?? ?? 44 0F B6 4F 04 41 83 E9 02";
+    uintptr_t interaction=R.find("native forge interaction",interactionSig);
+    q.forgeManager=R.branch("forge component manager",interaction?interaction+0x15:0);
+    if(q.forgeManager) R.verify("forge manager accessor",q.forgeManager,"48 83 EC 28 E8 ?? ?? ?? ?? 48 8B 88 28 01 00 00 48 8B 01 48 83 C4 28 48 FF 60 38");
+    q.gameContext=R.branch("game context",q.forgeManager?q.forgeManager+4:0);
+    if(q.gameContext) R.verify("game context accessor",q.gameContext,"40 53 48 83 EC 20 8B 0D ?? ?? ?? ?? 65 48 8B 04 25 58 00 00 00 BA 18 00 00 00");
+    q.componentLookup=R.branch("forge component lookup",interaction?interaction+0x4C:0);
+    if(q.componentLookup) R.verify("component lookup",q.componentLookup,"48 89 5C 24 18 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 30 41 0F B6 F8 44 8B E2 4C 8B E9");
+    if(interaction){
+        R.verify("forge lookup arguments",interaction+0x3C,"41 B1 01 C6 44 24 20 00 41 B0 0C 8B D0 48 8B CE E8 ?? ?? ?? ?? 8B 17 48 8B C8");
+        uintptr_t start=R.branch("interaction forge start",interaction+0x56);
+        if(start!=q.start){ ++R.fails; logf("forge interaction start target mismatch"); }
+    }
+    // Independently verify the script caller agrees on lookup ABI/type and start target.
+    uintptr_t script=R.find("script forge interaction","48 89 5C 24 08 57 48 83 EC 30 48 8B 49 60 49 8B C0 49 8B D9 C6 44 24 20 00 48 8B FA 41 B1 01 8B D0 41 B0 0C E8 ?? ?? ?? ?? 8B D3 48 8B C8 E8");
+    if(script){
+        if(R.branch("script component lookup",script+0x24)!=q.componentLookup ||
+           R.branch("script forge start",script+0x2E)!=q.start){ ++R.fails; logf("forge script targets mismatch"); }
+    }
+    uintptr_t playerPath=R.find("native current-player lookup","E8 ?? ?? ?? ?? 48 8B 48 08 48 8B 01 FF 90 00 02 00 00 48 8B 4F 60 41 B1 01 41 B0 06 C6 44 24 20 00 8B 50 30 E8 ?? ?? ?? ?? 8B D3 48 8B C8 E8");
+    if(playerPath && (R.branch("player game context",playerPath)!=q.gameContext ||
+       R.branch("player component lookup",playerPath+0x24)!=q.componentLookup)){
+        ++R.fails; logf("native current-player lookup targets mismatch");
+    }
+    return R.fails==before;
+}
+static bool queue_key(){   // F9 while nothing is being forged: in the recipe menu it starts / resumes the queue
+    if(!g_queue || !g_m || st()!=1) return false;
+    if(g_ctl.running()){ g_ctl.pause("stopped with the key"); return true; }
+    if(g_ctl.q.pieces()<=0) return false;
+    if(!g_canSwitch){ g_game.say("AutoForge queue: pick a queued recipe and craft it - this game version can't switch recipes for you"); g_game.note(fq::N_PICK_CRAFT); return true; }
+    g_ctl.start_in_menu(); return true;
+}
+
+// ---- driving the queue while the forge update is silent (the result dialog is up) ----
+// Observed live (2026-11-03 00:24): the log goes quiet at the quench - no forge update runs while the game's item
+// dialog is open, so a close requested from inside that update could never happen.  The game's message loop does keep
+// running, so the queue's post-quench phases are also ticked from there (msgpump.h), but only while the forge update
+// has been silent for PUMP_SILENT_MS; when it runs, it drives the queue as before and this stays out of the way.
+static const uint64_t PUMP_SILENT_MS=400;
+static uint64_t g_lastUpdateMs=0;          // g_clock() at the last forge update
+static bool g_pumpActive=false;            // the message-loop tick is driving the queue right now
+static kc::MainPump g_pump;
+static CRITICAL_SECTION g_cs;              // the queue controller is touched by the forge update and the message-loop tick
+static uint64_t g_pumpStatusT=0;
+static bool pump_phase(){ fq::Phase p=g_ctl.ph; return p==fq::WaitEnd || p==fq::Restarting; }
+static bool pump_want(){                   // helper thread, cheap: should the window thread get a tick now?
+    if(!g_queue || g_dead || !pump_phase()) return false;
+    uint64_t now=g_clock();
+    if(now-g_lastUpdateMs<PUMP_SILENT_MS) return false;
+    if(now-g_pumpStatusT>=3000){             // visible even if the tick never arrives (hook not delivering)
+        g_pumpStatusT=now;
+        logf("pump: phase '%s', forge update silent %llu ms, posted %ld, delivered %ld, dialog A=%p B=%p live=%d",fq::phase_name(g_ctl.ph),
+             (unsigned long long)(now-g_lastUpdateMs),(long)g_pump.posts,(long)g_pump.ticks,
+             g_modalSlotA?(void*)*g_modalSlotA:nullptr,g_modalSlotB?(void*)*g_modalSlotB:nullptr,active_result_modal()?1:0);
+    }
+    return true;
+}
+static void pump_drive(uint64_t now){
+    const bool firstPump=!g_pumpActive;
+    if(firstPump){
+        g_pumpActive=true;
+        logf("pump: forge update silent %llu ms in phase '%s' - queue driven from the game's message loop (thread %lu)",
+             (unsigned long long)(now-g_lastUpdateMs),fq::phase_name(g_ctl.ph),GetCurrentThreadId());
+    }
+    // A completed forge session can retire its C_Blacksmithing object before
+    // the native "Smithing successful" modal has closed. The result dialog is
+    // separately captured at its verified native Open callsite and can safely
+    // close without dereferencing that retired forge object.
+    const bool reachable=bs_valid();
+    if(firstPump && !reachable){
+        const bool mapped=g_bs && kc::readable(g_bs,8);
+        const uintptr_t actualVt=mapped ? *(uintptr_t*)g_bs : 0;
+        logf("pump: forge component unavailable during result: old=%p mapped=%d vt=%p expected=%p; use captured item modal independently",
+             (void*)g_bs,mapped?1:0,(void*)actualVt,(void*)g_bsVt);
+    }
+    bool active=false; int s=-1;
+    if(reachable){
+        uintptr_t m=F<uintptr_t>(g_bs,BS_MODEL);
+        active=F<uint8_t>(g_bs,BS_ACTIVE)!=0;
+        if(active && m && kc::readable(m,M_WP+8)){ g_m=m; s=F<uint8_t>(m,M_STATE); }
+    }
+    // When unreachable, use unknown state/inactive, not an immediate pause.
+    // Ctl::WaitEnd still verifies that the actual captured result dialog is
+    // active and fires the proper native close handler once. Only after it
+    // disappears may the controller consider starting the next piece.
+    // g_game.restart() separately requires a fresh, valid forge object.
+    static int lastS=-2; static bool lastA=false; static uintptr_t lastD=0;
+    uintptr_t dlg=active_result_modal();
+    if(s!=lastS || active!=lastA || dlg!=lastD){
+        lastS=s; lastA=active; lastD=dlg;
+        logf("pump: forge state %d, session %s, result dialog %p, forge object %s",
+             s,active?"open":"closed",(void*)dlg,reachable?"reachable":"retired/unreachable");
+    }
+    fq::Phase ph=g_ctl.ph;
+    g_ctl.tick(s,active);
+    if(g_ctl.ph!=ph) logf("queue: %s -> %s (state %d, forge %s, from the message loop)",fq::phase_name(ph),fq::phase_name(g_ctl.ph),s,active?"open":"closed");
+}
+static void pump_tick(){                   // runs on the game's window thread, between frames
+    if(!g_queue || g_dead || !pump_phase()) return;
+    uint64_t now=g_clock();
+    if(now-g_lastUpdateMs<PUMP_SILENT_MS) return;
+    EnterCriticalSection(&g_cs);
+    __try{ pump_drive(now); }
+    __except(EXCEPTION_EXECUTE_HANDLER){ logf("pump: fault 0x%08lX while driving the queue - paused",GetExceptionCode()); g_ctl.ph=fq::Off; g_ctl.pieceAuto=false; }
+    LeaveCriticalSection(&g_cs);
+}
 
 static void UpdateHook(void* self,float dt){
     pOrigUpdate(self,dt);
     if(g_dead) return;
+    g_lastUpdateMs=g_clock();
+    if(g_pumpActive){ g_pumpActive=false; logf("pump: forge update is running again"); }
     uintptr_t bs=(uintptr_t)self;
     __try{
         uintptr_t m=F<uintptr_t>(bs,BS_MODEL);
         if(g_watch) watch(bs,m);
         if(bs!=g_bs||m!=g_m){ if(g_ph!=Idle) logf("session changed -> idle"); g_ph=Idle; g_bs=bs; g_m=m; g_lastSt=-1; }
-        if(m && g_queue) batch_tick(F<uint8_t>(m,M_STATE));
+        if(g_queue){ EnterCriticalSection(&g_cs); __try{ queue_tick(m? F<uint8_t>(m,M_STATE) : -1); }__finally{ LeaveCriticalSection(&g_cs); } }
+        if(g_nativeModalClosedThisTick){
+            g_nativeModalClosedThisTick=false;
+            return; // native completion may have released the forge model
+        }
         if(m) tick(dt);
     }__except(EXCEPTION_EXECUTE_HANDLER){ logf("exception in tick (phase %s)",PN[g_ph]); g_ph=Idle; }
 }
@@ -676,10 +1118,26 @@ static bool resolve(kc::Resolver& R, Found& f){
 }
 #ifdef KC_DEVTOOLS
 extern "C" __declspec(dllexport) int KC_SelfTest(HMODULE game, uintptr_t* out){   // offline check (tools/selftest)
+    FILE* previousLog=kc::g_log; kc::g_log=stdout;
     kc::Resolver R; R.im.load(game); Found f{}; QFound q{}; bool ok=resolve(R,f); ok=resolve_queue(R,q) && ok;
+    ok=resolve_switch(R,q) && ok; ok=resolve_restart(R,q) && ok;
+    ok=check_native_result(R.im) && ok;
     uintptr_t* p=(uintptr_t*)&f; size_t n=0; for(size_t i=0;i<sizeof f/8;i++) out[n++]=p[i];
     p=(uintptr_t*)&q; for(size_t i=0;i<sizeof q/8;i++) out[n++]=p[i];
+    kc::g_log=previousLog;
     return ok? (int)n : -R.fails;
+}
+// Offline audit of the item-dialog capture (tools/hookaudit.cpp): applies the real call-site patches to the mapped,
+// never-executed game image and reports where they point.  out: A site, A trampoline, A slot, B site, B trampoline,
+// B slot, Open, close handler.
+extern "C" __declspec(dllexport) int KC_HookAudit(HMODULE game, uintptr_t* out){
+    kc::Resolver R; R.im.load(game);
+    if(!install_native_modal_close(R.im)) return 0;
+    const uintptr_t b=R.im.base;
+    const uintptr_t sites[2]={b+MODAL_CALL_A,b+MODAL_CALL_B}; volatile uintptr_t* slots[2]={g_modalSlotA,g_modalSlotB};
+    for(int i=0;i<2;i++){ out[i*3]=sites[i]; out[i*3+1]=kc::rel32(sites[i]+1); out[i*3+2]=(uintptr_t)slots[i]; }
+    out[6]=b+MODAL_RVA_OPEN; out[7]=(uintptr_t)pNativeItemClose;
+    return 8;
 }
 // Offline forge simulator hooks (tools/forgesim.cpp): a fake C_Blacksmithing/model/workpiece in plain memory.
 extern "C" __declspec(dllexport) void KC_SimInit(uintptr_t bs, void* workmap, uint64_t (*clock)(), int flipAt, const char* logPath){
@@ -693,34 +1151,61 @@ extern "C" __declspec(dllexport) int KC_SimTick(){ tick(0.02f); return (int)g_ph
 static HMODULE g_self=nullptr;
 static DWORD WINAPI Init(LPVOID){
     kc::init(g_self,"kcd2_autoforge");
+    InitializeCriticalSection(&g_cs);
     g_key.vk=kc::ini_key("Forge",VK_F9);
     g_flipAtPct=std::min(95,std::max(0,kc::ini_int("Options","FlipAt",50)));
     g_watch=kc::ini_int("Options","WatchForge",0)!=0;
     g_queue=kc::ini_int("Options","Queue",0)!=0;
     g_plus.vk=kc::ini_key("IncreaseQueue",VK_OEM_PLUS); g_minus.vk=kc::ini_key("DecreaseQueue",VK_OEM_MINUS);
-    g_padPlus.vk=VK_ADD; g_padMinus.vk=VK_SUBTRACT;
+    g_padPlus.vk=VK_ADD; g_padMinus.vk=VK_SUBTRACT; g_clear.vk=kc::ini_key("ClearQueue",VK_DELETE);
+    g_autoContinue=kc::ini_int("Options","AutoContinue",1)!=0;
+    g_noticesEnabled=kc::ini_int("Options","QueueNotices",1)!=0;
+    const bool autoDismiss=kc::ini_int("Options","QueueAutoDismissResult",1)!=0;
     HMODULE h=kc::wait_game(); if(!h){ logf("abort: WHGame.dll not loaded"); return 0; }
     kc::Resolver R; R.im.load(h); B=R.im.base;
-    logf("start v1.2.0-test (game ts 0x%08X) flip at %d%%%s%s",R.im.timestamp,g_flipAtPct,g_watch?", forge watch on (read-only)":"",g_queue?", batches on the recipe page":"");
+    logf("start v2.0.1-test native-reacquire (game ts 0x%08X) flip at %d%%%s%s",R.im.timestamp,g_flipAtPct,g_watch?", forge watch on (read-only)":"",g_queue?", recipe queue on":"");
     Found f{};
     if(!resolve(R,f)){ logf("disabled: this game version is not supported yet - nothing was changed"); return 0; }
     pWorkMap=f.workmap;
-    if(g_queue){   // optional: a failure here only turns batches off; forging works as before
+    if(g_queue){   // optional: a failure here only turns the queue off; forging works as before
         QFound q{}; int fails=R.fails;
         if(resolve_queue(R,q)){
             pShowPage=(ShowPage_t)q.page; pStrFromC=(StrFromC_t)q.strFromC; pStrFree=(StrFree_t)q.strFree; pStrAssign=(StrAssign_t)q.strAssign;
             g_queue=hook_page(q.page+PG_CALL,q.make);
         } else g_queue=false;
+        if(g_queue && resolve_switch(R,q)){
+            pCanCraft=(CanCraft_t)q.canCraft; pCraft=(Craft_t)q.craft; pUiMgr=(UiMgr_t)q.uiMgr; pFlashCall=(FlashCall_t)q.flashCall; g_apseVt=q.apseVt;
+            g_canSwitch=true;
+        }
+        if(g_canSwitch && resolve_restart(R,q)){
+            pStartForge=(StartForge_t)q.start; pForgeManager=(UiMgr_t)q.forgeManager;
+            pComponentLookup=(ComponentLookup_t)q.componentLookup; pGameContext=(UiMgr_t)q.gameContext;
+            g_canRestart=true;
+        }
         R.fails=fails;
-        char kp[16],km[16];
-        logf(g_queue? "batch: ready (%s / %s on the forge's recipe page)" : "batch: off (this game version is not supported for batches)",
-             kc::key_name(g_plus.vk,kp,sizeof kp),kc::key_name(g_minus.vk,km,sizeof km));
+        if(g_queue && g_canSwitch && g_canRestart && autoDismiss)
+            g_nativeModalReady=install_native_modal_close(R.im);
+        g_ctl.g=&g_game; g_ctl.autoContinue=g_autoContinue && g_canRestart;
+            if(g_queue && g_noticesEnabled) install_notices(R.im);
+        g_ctl.autoDismiss=autoDismiss && g_nativeModalReady;
+        logf("queue: native result-screen close %s (game's registered close input handler; no injected keys)",
+             g_ctl.autoDismiss?"enabled":"off (manual Esc available)");
+        char kp[16],km[16],kc2[16];
+        if(!g_queue) logf("queue: off (this game version is not supported for the queue)");
+        else logf("queue: ready (%s / %s on the forge's recipe page, %s clears; switching recipes %s, reopening the forge %s)",
+             kc::key_name(g_plus.vk,kp,sizeof kp),kc::key_name(g_minus.vk,km,sizeof km),kc::key_name(g_clear.vk,kc2,sizeof kc2),
+             g_canSwitch?"on":"OFF (pick each queued recipe yourself)", g_ctl.autoContinue?"on":(g_autoContinue?"OFF (not supported)":"off (AutoContinue=0)"));
     }
+    g_bsVt=f.vt;
     void** slot=&((void**)f.vt)[19];
     pOrigUpdate=(Update_t)f.update;
     kc::write_ptr(slot,(void*)&UpdateHook);
+    if(g_queue && g_ctl.autoContinue){       // the post-quench steps need a tick that survives the result dialog
+        g_pump.tick=pump_tick; g_pump.want=pump_want; g_pump.log=kc::logf;
+        if(!g_pump.start(g_self)) logf("pump: could not start - the result screen has to be closed by hand");
+    }
     char kn[16]; logf("ready (%s at the forge)",kc::key_name(g_key.vk,kn,sizeof kn));
     return 0;
 }
-KC_PLUGIN("Theatrical AutoForge", KC_AUTHOR, 112)
+KC_PLUGIN("Theatrical AutoForge", KC_AUTHOR, 200)
 BOOL WINAPI DllMain(HINSTANCE h,DWORD r,LPVOID){ if(r==DLL_PROCESS_ATTACH){ DisableThreadLibraryCalls(h); g_self=h; KC_START(Init); } return TRUE; }

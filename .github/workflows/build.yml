@@ -38,6 +38,9 @@ jobs:
         shell: cmd
         run: |
           type theatrical\automarksman\out\dev\marksim.txt | findstr /C:"ALL PASSED" || exit /b 1
+          out\dev\forgequeuetest.exe || exit /b 1
+          out\dev\pumptest.exe || exit /b 1
+          out\dev\restarttest.exe || exit /b 1
           theatrical\autolockpick\out\dev\lpsim.exe 2000 1 || exit /b 1
           theatrical\autolockpick\out\dev\lpsim.exe 2000 7 || exit /b 1
           theatrical\autopickpocket\out\dev\ppsim.exe 2000 1 || exit /b 1
