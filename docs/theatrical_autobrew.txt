@@ -61,7 +61,30 @@ SETTINGS  (Mods\theatrical_autobrew\KCSE\Plugins\kcd2_alchemy.ini)
             DebugLog=0      1 = detailed log for bug reports
   [Overlay] X=60 Y=140 SizePercent=140 LineHeight=20 Rows=12   where and how big the menu is drawn
 
-TESTED
+ACCEPTANCE STATUS
+  Installed and loading: the live log reports v2.0.0-test, queue on and queue ready.
+  Mixed-potion queues have NOT been verified in game. Offline tests do not prove
+  overlay rendering, native grading, quality, rewards or between-brew transitions.
+  This candidate includes PR #10's boil timer changes and the existing result-
+  presenter compatibility fix; another mod's detour is left untouched.
+  The private acceptance package sets Queue=1 and QueueNotices=0 (notices off)
+  to avoid literal SendInfoText tokenization; menu/progress
+  overlay and full log messages remain. Source defaults are unchanged.
+  Preserve or back up your own INI before any game-closed installation. Original
+  Autobrew is also installed on the current setup: follow its existing no-co-run
+  guidance above; startup compatibility alone does NOT prove safe coexistence.
+
+MINIMUM GAMEPLAY ACCEPTANCE (one two-recipe queue)
+  At a table, with the book closed and ingredients for two known cheap recipes:
+  F8 -> first recipe x1 -> second DIFFERENT recipe x1 -> F8 once. Do not manually
+  reset or restock the table. Confirm visible menu, correct ingredients, both
+  native potion awards/qualities, automatic transition, final result popup and
+  return to control. Compare actual inventory before/after; the log's "done"
+  counter alone is NOT proof that the game graded and awarded both potions.
+  Preserve kcd2_alchemy.log after exiting. On a stall, stop once with F8 and keep
+  the failure log; do not repeatedly restart or reset over an unfinished brew.
+
+TESTED (prior single-recipe behavior, NOT mixed-queue acceptance)
   Weak and strong boils, distilled potions and powders (for example Bowman's Brew, Buck's Blood,
   Chamomile Concoction, lead shot). Brews come out at the quality Henry's skill and perks allow.
 
