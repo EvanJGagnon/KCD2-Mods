@@ -1,4 +1,4 @@
-THEATRICAL AUTOBREW 1.0.2 - Kingdom Come: Deliverance II
+THEATRICAL AUTOBREW 2.0.0-test - Kingdom Come: Deliverance II
 by Flubbermunchkin - an adaptation of Autobrew by JerryYOJ
 
 Open a recipe in the alchemy book, press F8, and Henry brews it - visibly, step by step, in real
@@ -38,20 +38,64 @@ HOW TO USE
   2. Press F8 (with the book open, or just after closing it at the table).
   3. Press F8 again at any time to stop.
 
+BREW QUEUE (2.0, test build; off unless Queue=1 in the .ini)
+  1. At the alchemy table, with the book closed, press F8. A list of the recipes Henry knows
+     (that AutoBrew can brew) appears on the left of the screen.
+  2. Up / Down picks a recipe, + / - sets how many to brew (numpad + / - work too), Delete clears.
+     The list shows what one brew needs and what the whole queue needs against what Henry carries.
+     + is refused when an ingredient would run short for the whole queue.
+  3. Press F8 again: Henry brews every queued potion in turn, each one fully by hand as above.
+     The table is restocked for each recipe, so the book is not needed between brews.
+  4. F8 during the queue stops the current brew and cancels the rest.
+  A brew whose ingredients have run out by its turn is skipped (the screen says so). With
+  AutoContinue=1 the result popup shows once, after the last brew; every potion is still made,
+  graded and rewarded by the game as usual. With a recipe page open in the book, F8 still brews
+  that one recipe, as in 1.0.
+
 SETTINGS  (Mods\theatrical_autobrew\KCSE\Plugins\kcd2_alchemy.ini)
   [Keys]    Brew=F8         start/stop key (F1-F12, a letter or digit, or a symbol key such as ])
-  [Options] DebugLog=0      1 = detailed log for bug reports
+            IncreaseQueue=+  DecreaseQueue=-  MenuUp=Up  MenuDown=Down  ClearQueue=Delete
+  [Options] Queue=0         1 = brew queue (see above)
+            AutoContinue=1  1 = go on to the next brew by itself; 0 = wait until you close each result
+            QueueNotices=1  short on-screen lines for queue progress
+            DebugLog=0      1 = detailed log for bug reports
+  [Overlay] X=60 Y=140 SizePercent=140 LineHeight=20 Rows=12   where and how big the menu is drawn
 
-TESTED
+ACCEPTANCE STATUS
+  Installed and loading: the live log reports v2.0.0-test, queue on and queue ready.
+  Mixed-potion queues have NOT been verified in game. Offline tests do not prove
+  overlay rendering, native grading, quality, rewards or between-brew transitions.
+  This candidate includes PR #10's boil timer changes and the existing result-
+  presenter compatibility fix; another mod's detour is left untouched.
+  The private acceptance package sets Queue=1 and QueueNotices=0 (notices off)
+  to avoid literal SendInfoText tokenization; menu/progress
+  overlay and full log messages remain. Source defaults are unchanged.
+  Preserve or back up your own INI before any game-closed installation. Original
+  Autobrew is also installed on the current setup: follow its existing no-co-run
+  guidance above; startup compatibility alone does NOT prove safe coexistence.
+
+MINIMUM GAMEPLAY ACCEPTANCE (one two-recipe queue)
+  At a table, with the book closed and ingredients for two known cheap recipes:
+  F8 -> first recipe x1 -> second DIFFERENT recipe x1 -> F8 once. Do not manually
+  reset or restock the table. Confirm visible menu, correct ingredients, both
+  native potion awards/qualities, automatic transition, final result popup and
+  return to control. Compare actual inventory before/after; the log's "done"
+  counter alone is NOT proof that the game graded and awarded both potions.
+  Preserve kcd2_alchemy.log after exiting. On a stall, stop once with F8 and keep
+  the failure log; do not repeatedly restart or reset over an unfinished brew.
+
+TESTED (prior single-recipe behavior, NOT mixed-queue acceptance)
   Weak and strong boils, distilled potions and powders (for example Bowman's Brew, Buck's Blood,
   Chamomile Concoction, lead shot). Brews come out at the quality Henry's skill and perks allow.
 
 KNOWN ISSUES AND LIMITATIONS
   - Only tested with the Steam version of the game (1.5.x, build 15693).
-  - Brews one batch per key press (no looping).
+  - Without the queue: one batch per key press.
+  - Queue (test build): the menu is drawn with the game's script text; if it does not show, the
+    log says why. The menu keys also reach the game.
   - Recipes with steps the mod cannot perform are refused (see the log).
-  - Each boiling turn takes slightly longer than the hourglass itself, because the mod waits for
-    the pot to boil before turning it; this has not affected quality in testing.
+  - The pot can come off the fire a moment before the sand has fully run out: the mod times
+    each turn by the game's boil timer, which is what the recipe is judged on.
   - If the brew is interrupted (you leave the table, open a menu, get attacked), the mod stops;
     finish by hand or reset the table and start again.
   - Mods that change the alchemy minigame or recipes may not be compatible.
@@ -76,6 +120,13 @@ LICENSE
   ported Autobrew parts, is available as a separate download on the Nexus page.
 
 CHANGES
+  2.0.0-test - Brew queue: a menu of Henry's learned recipes with amounts, the ingredients for
+           the whole queue, and brewing them one after another without the book. Off by default.
+  1.0.3  - Boil turns now last exactly as long as the recipe asks. Each turn ends on the
+           game's own boil timer instead of when the sand runs out; waiting for the sand
+           added 2-4 s per turn, so exact-time steps failed (for example the dandelion in
+           Buck's Blood) and potions came out below the quality they should reach.
+         - On a strong boil Henry now turns the sandglass first, then works the bellows.
   1.0.2  - The key setting now accepts symbol keys such as ] or [; a key value the mod
            does not understand is reported in the log instead of silently using the default.
   1.0.1  - Improved ingredient quality handling and diagnostics.

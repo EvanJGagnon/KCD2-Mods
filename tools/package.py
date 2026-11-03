@@ -45,8 +45,14 @@ MODS = [
          ini='[Keys]\n' + KEYHELP + 'Forge=F9\n\n[Options]\n'
              '; turn the piece over once at this % completion, like a smith would (0 = only when a side is worked out)\nFlipAt=0\n' + DEBUG),
     dict(folder='theatrical_autobrew', title='Theatrical Autobrew', zip='TheatricalAutobrew', dll='kcd2_alchemy.dll', data=['alch_recipes.txt'],
-         desc='Henry brews the open recipe step by step, in real time (F8). An adaptation of Autobrew by JerryYOJ.', ver='1.0.2', key='Brew',
-         ini='[Keys]\n' + KEYHELP + 'Brew=F8\n\n[Options]\n' + DEBUG),
+         desc='Henry brews the open recipe step by step, in real time (F8), or a queue of different potions picked from a menu. An adaptation of Autobrew by JerryYOJ.', ver='2.0.0-test', key='Brew',
+         ini='[Keys]\n' + KEYHELP + 'Brew=F8\n'
+             '; queue menu (Queue=1): amount, choose a recipe, clear the queue (also Up, Down, Left, Right, Delete, PageUp, PageDown, Enter)\n'
+             'IncreaseQueue=+\nDecreaseQueue=-\nMenuUp=Up\nMenuDown=Down\nClearQueue=Delete\n\n[Options]\n'
+             '; 1 = queue: F8 at the table with the book closed opens a menu of Henry\'s recipes; pick amounts, F8 brews them in turn\nQueue=0\n'
+             '; 1 = go on to the next brew by itself (the result popup shows after the last one); 0 = wait for you to close each result\nAutoContinue=1\n'
+             '; 1 = short on-screen lines for queue progress\nQueueNotices=1\n' + DEBUG +
+             '\n[Overlay]\n; where the queue menu is drawn (pixels from the top left) and how big\nX=60\nY=140\nSizePercent=140\nLineHeight=20\nRows=12\n'),
     dict(folder='horse_route_follow', title='Horse Route Follow', zip='HorseRouteFollow', dll='kcd2_autotravel.dll',
          data=['trosecko.amg', 'kutnohorsko.amg', 'klaster.amg'],
          desc='Horse auto-follow takes the road route to your custom map marker, drawn on the map.', ver='1.1.3',
