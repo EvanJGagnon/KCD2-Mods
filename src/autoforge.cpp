@@ -563,14 +563,21 @@ static const char* SIG_SS_UPDATE = "48 89 5C 24 18 48 89 74 24 20 57 48 83 EC 30
 static const char* SIG_SS_EXEC   = "48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 83 EC 50 48 8B F9 48 89 50 E8"; // vtbl[6] ExecuteBuffer 0x4D4484
 static SsUpdate_t g_ssUpdate=nullptr; static SsExec_t g_ssExec=nullptr;
 static char g_noticeBuf[2][260]; static volatile LONG g_noticeSeq=0, g_noticeDone=0;
-static volatile LONG g_resultCloseQueued=0;
 static bool g_noticesEnabled=true;
-// Codex traced the actual Smithing successful popup to the native
-// C_UIModalDialogItem / modal_dialog_item flow (WHGame.dll 0x2B14E80).
-// Its XML UI element is ApseModalDialog, NOT ItemSelection.
-// CloseItemDialog may only close the visible Flash window: wait for real
-// forge-state confirmation and fail closed if the game doesn't transition.
-static const char* NATIVE_RESULT_CLOSE = "UIAction.CallFunction('ApseModalDialog', -1, 'CloseItemDialog')";
+// Genuine "close" input handler registered by C_UIModalDialogItem::Open:
+// at game RVA 0x2B14E80 it registers an action named "close", whose
+// callback RVA 0x1F53E90 invokes C_UIModalDialogItem::Close (0x2B11BC4)
+// and then its completion delegate. A Flash CloseItemDialog call bypasses
+// that native callback and can leave the result screen in place.
+// Two verified native Open callsites capture the in-game modal owner.
+// No input injection or synthetic Esc is used.
+using NativeItemCloseEvent_t = void (*)(void*);
+static NativeItemCloseEvent_t pNativeItemClose=nullptr;
+static volatile uintptr_t* g_modalSlotA=nullptr;
+static volatile uintptr_t* g_modalSlotB=nullptr;
+static bool g_nativeModalReady=false;
+static bool g_nativeModalClosedThisTick=false;
+static volatile LONG g_nativeCloseGuard=0;
 static void notice(const char* text){
     if(!g_ssExec || !g_noticesEnabled) return;
     LONG n=g_noticeSeq+1; char* b=g_noticeBuf[n&1]; size_t k=0;
@@ -586,15 +593,6 @@ static void* SsUpdateHook(void* self,void* a,void* b,void* c){
         g_noticeDone=n; const char* line=g_noticeBuf[n&1];
         __try { g_ssExec(self,line,strlen(line),"TheatricalAutoForge",nullptr); }
         __except(EXCEPTION_EXECUTE_HANDLER){ g_ssExec=nullptr; logf("queue notices: script error - notices off"); }
-    }
-    if(InterlockedExchange(&g_resultCloseQueued,0)!=0 && g_ssExec){
-        __try {
-            bool accepted=g_ssExec(self,NATIVE_RESULT_CLOSE,strlen(NATIVE_RESULT_CLOSE),
-                "TheatricalAutoForgeResultClose",nullptr);
-            logf("queue: native ApseModalDialog.CloseItemDialog requested through game's UIAction; script accepted=%d",(int)accepted);
-        } __except(EXCEPTION_EXECUTE_HANDLER) {
-            logf("queue: native result close call failed; queue will require manual Esc");
-        }
     }
     return r;
 }
@@ -628,6 +626,20 @@ static uintptr_t apse_ui(){            // the crafting UI (I_UIApse of C_UIApse)
     uintptr_t m=pUiMgr(); if(!m || !kc::readable(m+UI_APSE,8)) return 0;
     uintptr_t ui=F<uintptr_t>(m,UI_APSE); if(!ui || !kc::readable(ui,8) || *(uintptr_t*)ui!=g_apseVt) return 0;
     return ui;
+}
+static void clear_result_modal_capture(){
+    if(g_modalSlotA) *g_modalSlotA=0;
+    if(g_modalSlotB) *g_modalSlotB=0;
+    InterlockedExchange(&g_nativeCloseGuard,0);
+}
+static bool native_modal_live(uintptr_t ptr){
+    return ptr && kc::readable(ptr,0xA9) && F<uint8_t>(ptr,0xA8)==1;
+}
+static uintptr_t active_result_modal(){
+    const uintptr_t a=g_modalSlotA?*g_modalSlotA:0, b=g_modalSlotB?*g_modalSlotB:0;
+    const bool aa=native_modal_live(a), bb=native_modal_live(b);
+    if(aa && bb && a!=b){logf("queue: multiple active result dialog owners - refuse auto-close"); return 0;}
+    return aa?a:(bb?b:0);
 }
 struct ForgeGame : fq::Game {
     uint64_t now() override { return g_clock(); }
@@ -667,13 +679,33 @@ struct ForgeGame : fq::Game {
     bool result_open() override {
         // Both fields were observed live at the post-quench selection screen:
         // state 7 (hardening), m_hard 2 (quenched). Never close any UI otherwise.
-        return g_m && g_bs && F<uint8_t>(g_bs,BS_ACTIVE)!=0 &&
+        return g_nativeModalReady && g_m && g_bs &&
+               F<uint8_t>(g_bs,BS_ACTIVE)!=0 &&
                F<uint8_t>(g_m,M_STATE)==ST_HARDEN &&
-               F<uint8_t>(g_m,M_HARD)==2;
+               F<uint8_t>(g_m,M_HARD)==2 && active_result_modal()!=0;
     }
     bool dismiss_result() override {
-        if(!result_open() || !g_ssExec) return false;
-        InterlockedExchange(&g_resultCloseQueued,1);
+        if(!pNativeItemClose || !result_open()) {
+            logf("queue: native result owner not ready or not visible - manual Esc needed");
+            return false;
+        }
+        if(InterlockedCompareExchange(&g_nativeCloseGuard,1,0)!=0) return false;
+        uintptr_t modal=active_result_modal();
+        if(!modal) return false;
+        // The input system's genuine "close" callback only accesses
+        // [context+8] (verified in game's 0x1F53E90 disassembly).
+        // It closes the modal, unregisters its input, and invokes the native
+        // completion delegate, not just the visible Flash animation.
+        void* context[2]={nullptr,(void*)modal};
+        g_nativeModalClosedThisTick=true; // avoid touching forge pointers after callback
+        __try {
+            logf("queue: executing game's native result dialog close input handler");
+            pNativeItemClose(context);
+            logf("queue: native result close handler returned; waiting for inactive forge session");
+        } __except(EXCEPTION_EXECUTE_HANDLER) {
+            logf("queue: native result close threw; no retries, manual Esc required");
+            return false;
+        }
         return true;
     }
     void say(const char* line) override { logf("%s",line); notice(line); }
@@ -749,7 +781,7 @@ static void queue_tick(int s){
     if(active){ uint32_t id=F<uint32_t>(g_bs,BS_ENTITY); if(id && id!=g_forgeId){ g_forgeId=id; logf("queue: forge entity %u",id); } }
     if(s==1) g_menuSeen=now;
     if(g_lastSt==1 && s!=1){   // the recipe menu closed: with a piece chosen (2..20) or without (3 = closed, 21 = leaving)
-        if(s>=2 && s<=20) g_batchAuto=g_ctl.chosen(recipeId(g_m));
+        if(s>=2 && s<=20){ clear_result_modal_capture(); g_batchAuto=g_ctl.chosen(recipeId(g_m)); }
         else g_ctl.menu_closed();
         g_pageObj=0; g_pageRecipe[0]=0; g_pageLog[0]=0; g_menuSeen=0; g_pageT=0;
     }
@@ -783,6 +815,85 @@ static bool hook_page(uintptr_t site, uintptr_t factory){
     VirtualProtect((void*)site,5,old,&old); FlushInstructionCache(GetCurrentProcess(),(void*)site,5);
     return true;
 }
+// Verified on WHGame.dll timestamp 0x6A350E20. These three native paths
+// represent the *same* result-dialog close action that Esc dispatches:
+// Open (0x2B14E80), registered close callback (0x1F53E90), and
+// C_UIModalDialogItem::Close (0x2B11BC4). The callback also invokes the
+// game completion delegate. XML CloseItemDialog alone doesn't.
+static const char* SIG_MODAL_OPEN =
+    "48 8B C4 55 53 56 57 41 54 41 56 41 57 48 8D 68 B1 48 81 EC F0 00 00 00";
+static const char* SIG_MODAL_CLOSE =
+    "48 8B C4 48 89 58 10 48 89 70 18 57 48 83 EC 70 48 8B F1 C6 81 A8 00 00 00 00";
+static const char* SIG_MODAL_ON_CLOSE =
+    "40 53 48 83 EC 20 48 8B 59 08 80 BB A8 00 00 00 00 74 1D 48 8B CB E8 ?? ?? ?? ??";
+static const char* SIG_MODAL_CALLER_A =
+    "4C 8B DC 49 89 5B 08 49 89 73 10 57 48 81 EC 80 00 00 00 8D 42 FD 41 8B F1";
+static const char* SIG_MODAL_CALLER_B =
+    "48 85 FF 0F 84 ?? ?? ?? ?? 41 8B 58 50 48 81 C1 58 02 00 00 0F B6 C2";
+static constexpr uintptr_t MODAL_RVA_OPEN=0x2B14E80, MODAL_RVA_CLOSE=0x2B11BC4,
+    MODAL_RVA_ON_CLOSE=0x1F53E90, MODAL_RVA_CALLER_A=0x2B8E3D8,
+    MODAL_RVA_CALLER_B=0x234192C, MODAL_CALL_A=0x2B8E436,
+    MODAL_CALL_B=0x2341974;
+static bool check_native_result(const kc::Image& im){
+    if(im.timestamp!=0x6A350E20) {
+        logf("queue: native result close disabled: game build changed (ts 0x%08X)",im.timestamp);
+        return false;
+    }
+    kc::Resolver C; C.im=im;
+    const uintptr_t base=im.base;
+    C.verify("native item result open",base+MODAL_RVA_OPEN,SIG_MODAL_OPEN);
+    C.verify("native item result close",base+MODAL_RVA_CLOSE,SIG_MODAL_CLOSE);
+    C.verify("native close input handler",base+MODAL_RVA_ON_CLOSE,SIG_MODAL_ON_CLOSE);
+    C.verify("native result open caller A",base+MODAL_RVA_CALLER_A,SIG_MODAL_CALLER_A);
+    C.verify("native result open caller B",base+MODAL_RVA_CALLER_B,SIG_MODAL_CALLER_B);
+    if(!C.ok())return false;
+    // Actual registered native "close" handler calls the actual Close method.
+    const uintptr_t call=base+MODAL_RVA_ON_CLOSE+0x16;
+    if(*(uint8_t*)call!=0xE8 || kc::rel32(call+1)!=base+MODAL_RVA_CLOSE)return false;
+    // Two distinct callsites can open the item result dialog. Both must be
+    // original direct calls. If another mod has hooked them, do not overwrite.
+    for(uintptr_t at : {base+MODAL_CALL_A,base+MODAL_CALL_B}) {
+        if(*(uint8_t*)at!=0xE8 || kc::rel32(at+1)!=base+MODAL_RVA_OPEN){
+            logf("queue: item dialog caller already modified; automatic dismissal disabled");
+            return false;
+        }
+    }
+    return true;
+}
+// Call-site trampoline captures RCX, the actual C_UIModalDialogItem owner,
+// then tail-jumps to the game's *unmodified* Open function. All arguments,
+// registers and original return address are preserved. Do not hook or invoke
+// any UI API speculatively; this specific callsite is signature-verified.
+static bool hook_native_modal_open(uintptr_t site,uintptr_t original,volatile uintptr_t** capture){
+    uint8_t* pg=alloc_near(site);
+    if(!pg)return false;
+    *capture=(volatile uintptr_t*)(pg+0x800);
+    **capture=0;
+    uint8_t* p=pg;
+    p[0]=0x48; p[1]=0x89; p[2]=0x0D;
+    *(int32_t*)(p+3)=(int32_t)((uintptr_t)*capture-(uintptr_t)(p+7));
+    p+=7;
+    p[0]=0xFF; p[1]=0x25; *(int32_t*)(p+2)=0;
+    *(uint64_t*)(p+6)=(uint64_t)original;
+    FlushInstructionCache(GetCurrentProcess(),pg,0x30);
+    DWORD old=0;
+    if(!VirtualProtect((void*)site,5,PAGE_EXECUTE_READWRITE,&old))return false;
+    *(int32_t*)(site+1)=(int32_t)((uintptr_t)pg-(site+5));
+    VirtualProtect((void*)site,5,old,&old);
+    FlushInstructionCache(GetCurrentProcess(),(void*)site,5);
+    return true;
+}
+static bool install_native_modal_close(const kc::Image& im){
+    if(!check_native_result(im))return false;
+    const uintptr_t b=im.base;
+    // Prevalidated callsites, no speculative addresses or blind key presses.
+    if(!hook_native_modal_open(b+MODAL_CALL_A,b+MODAL_RVA_OPEN,&g_modalSlotA))return false;
+    if(!hook_native_modal_open(b+MODAL_CALL_B,b+MODAL_RVA_OPEN,&g_modalSlotB))return false;
+    pNativeItemClose=(NativeItemCloseEvent_t)(b+MODAL_RVA_ON_CLOSE);
+    logf("queue: native result close registered for both item dialog open paths");
+    return true;
+}
+
 struct QFound { uintptr_t page, make, ctor, rows, strFromC, strFree, strAssign;
                 uintptr_t canCraft, craft, uiMgr, start, mgStart, focus, flashCall, apseVt, focused; };
 static bool resolve_queue(kc::Resolver& R, QFound& q){
@@ -836,6 +947,10 @@ static void UpdateHook(void* self,float dt){
         if(g_watch) watch(bs,m);
         if(bs!=g_bs||m!=g_m){ if(g_ph!=Idle) logf("session changed -> idle"); g_ph=Idle; g_bs=bs; g_m=m; g_lastSt=-1; }
         if(g_queue) queue_tick(m? F<uint8_t>(m,M_STATE) : -1);
+        if(g_nativeModalClosedThisTick){
+            g_nativeModalClosedThisTick=false;
+            return; // native completion may have released the forge model
+        }
         if(m) tick(dt);
     }__except(EXCEPTION_EXECUTE_HANDLER){ logf("exception in tick (phase %s)",PN[g_ph]); g_ph=Idle; }
 }
@@ -854,6 +969,7 @@ static bool resolve(kc::Resolver& R, Found& f){
 extern "C" __declspec(dllexport) int KC_SelfTest(HMODULE game, uintptr_t* out){   // offline check (tools/selftest)
     kc::Resolver R; R.im.load(game); Found f{}; QFound q{}; bool ok=resolve(R,f); ok=resolve_queue(R,q) && ok;
     ok=resolve_switch(R,q) && ok; ok=resolve_restart(R,q) && ok;
+    ok=check_native_result(R.im) && ok;
     uintptr_t* p=(uintptr_t*)&f; size_t n=0; for(size_t i=0;i<sizeof f/8;i++) out[n++]=p[i];
     p=(uintptr_t*)&q; for(size_t i=0;i<sizeof q/8;i++) out[n++]=p[i];
     return ok? (int)n : -R.fails;
@@ -897,11 +1013,13 @@ static DWORD WINAPI Init(LPVOID){
         }
         if(g_canSwitch && resolve_restart(R,q)){ pStartForge=(StartForge_t)q.start; g_canRestart=true; }
         R.fails=fails;
+        if(g_queue && g_canSwitch && g_canRestart && autoDismiss)
+            g_nativeModalReady=install_native_modal_close(R.im);
         g_ctl.g=&g_game; g_ctl.autoContinue=g_autoContinue && g_canRestart;
-        if(g_queue) install_notices(R.im); // required for result UI close even if notices are hidden
-        g_ctl.autoDismiss=autoDismiss && g_ssExec!=nullptr;
-        logf("queue: result screen auto-close %s (ApseModalDialog.CloseItemDialog; never sends Esc)",
-             g_ctl.autoDismiss?"enabled":"off (manual Esc still available)");
+            if(g_queue && g_noticesEnabled) install_notices(R.im);
+        g_ctl.autoDismiss=autoDismiss && g_nativeModalReady;
+        logf("queue: native result-screen close %s (game's registered close input handler; no injected keys)",
+             g_ctl.autoDismiss?"enabled":"off (manual Esc available)");
         char kp[16],km[16],kc2[16];
         if(!g_queue) logf("queue: off (this game version is not supported for the queue)");
         else logf("queue: ready (%s / %s on the forge's recipe page, %s clears; switching recipes %s, reopening the forge %s)",

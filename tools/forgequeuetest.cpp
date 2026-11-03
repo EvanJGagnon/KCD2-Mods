@@ -238,7 +238,7 @@ static void t_other_recipe() {
 }
 
 static void t_native_result_close() {
-    printf("native ItemSelection close: one request only after queued quench; otherwise manual Esc fallback\n");
+    printf("native result modal close: one request only after queued quench; otherwise manual Esc fallback\n");
     Fake f; fq::Ctl c; setup(f, c);
     f.simulateResultScreen = true; c.autoDismiss = true;
     f.inv = { { "Scrap Steel", 8 }, { "Fastening", 5 }, { "Scrap Metal", 6 } };
@@ -246,7 +246,7 @@ static void t_native_result_close() {
     c.start_in_menu(); f.run(1000);
     CHECK(f.made.size() == 2 && c.q.pieces() == 0, "queued 2 complete with result screen (%zu)", f.made.size());
     CHECK(f.closeRequests == 1, "only the FIRST result auto-dismissed (%d requests)", f.closeRequests);
-    CHECK(said(f, "requested native result-screen close"), "native close request logged");
+    CHECK(said(f, "requested native result-screen close"), "native close handler requested");
 
     Fake fail; fq::Ctl pause; setup(fail,pause);
     fail.simulateResultScreen=true; fail.closeWorks=false; pause.autoDismiss=true;

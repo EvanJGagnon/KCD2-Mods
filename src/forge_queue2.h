@@ -133,7 +133,7 @@ struct Game {
     virtual bool craft() = 0;                               // the game's craft handler (what the craft key calls)
     virtual bool restart() = 0;                             // the game's forge start (what using the forge calls)
     virtual bool result_open() = 0;                         // finished workpiece state, not an arbitrary menu
-    virtual bool dismiss_result() = 0;                     // request game's ApseModalDialog.CloseItemDialog UI action (NOT an Esc key)
+    virtual bool dismiss_result() = 0;                     // request the game's registered native modal 'close' input handler (NOT an Esc key)
     virtual void say(const char* line) = 0;                 // log + optional notice
     virtual ~Game() {}
 };
@@ -223,8 +223,8 @@ struct Ctl {
             return;
         case Forging: return;
         case WaitEnd:
-            // The game opens its native ItemSelection result screen after quench.
-            // On this specific state only, ask that UI's Close() callback to fire.
+            // The game opens its native modal_dialog_item result screen after quench.
+            // On this specific state only, invoke its registered native close handler.
             // No synthetic Esc key: it can dismiss the wrong menu.
             if (active) {
                 sawInactive = false;
